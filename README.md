@@ -83,6 +83,11 @@ Gli eseguibili non sono firmati. Al primo avvio:
 quando i controlli `windows-x64`, `macos-arm64` e `macos-x64` sono verdi. Dependabot propone ogni lunedì
 gli aggiornamenti delle dipendenze Python e delle GitHub Actions.
 
+## Sostieni il progetto
+
+MassiveRenamer è gratuito. Se ti è utile e vuoi contribuire, puoi fare una donazione con
+[PayPal](https://www.paypal.me/GiulioBanterla). Il link è anche nel menu **Aiuto** del programma.
+
 ## Licenza
 
 GNU Lesser General Public License 2.1: vedi [LICENSE](LICENSE). È compatibile con PySide6, che usa la stessa famiglia di licenze (LGPL).
