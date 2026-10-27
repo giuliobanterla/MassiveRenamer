@@ -1,0 +1,43 @@
+# MassiveRenamer
+
+Rinomina molti file in una volta, su Windows e macOS; ispirato a Lupas Rename.
+Python 3.10+, interfaccia PySide6 (Qt), LGPL-2.1. Repository pubblico: tutto quello che viene
+committato è pubblico, quindi niente dati personali, nomi di host o segreti.
+
+## Struttura
+
+```
+massiverenamer/engine.py   regole, anteprima, rinomina in due passaggi, annullamento, script; nessuna dipendenza da Qt
+massiverenamer/gui.py      interfaccia PySide6
+massiverenamer/i18n.py     testi italiano/inglese
+tests/                     pytest, solo sul motore
+build.py                   eseguibile con PyInstaller (.app su macOS, .exe su Windows)
+```
+
+## Build e test
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/python -m pytest
+.venv/bin/python -m massiverenamer
+.venv/bin/python build.py
+```
+
+- Ogni nuovo testo dell'interfaccia va in `i18n.py` in **entrambe** le lingue.
+- La logica sta in `engine.py`, testabile senza interfaccia; `gui.py` resta un sottile strato sopra.
+
+## Piattaforme
+
+La CI (`.github/workflows/build.yml`) esegue test e build su `windows-x64`, `macos-arm64` e
+`macos-x64`; questi tre controlli sono obbligatori per il merge. Il Mac del maintainer è Intel x64:
+in locale gira solo macOS x64, Windows e arm64 sono verificati solo dalla CI. Il codice che dipende
+dal sistema va dietro `sys.platform` e va pensato per entrambi i rami (nomi non validi, maiuscole e
+minuscole, script `.bat`/`.sh`).
+
+## Flusso di lavoro
+
+- `main` è protetto: si lavora su un branch, si apre una PR con `gh`, si aspetta la CI verde
+  (`gh run watch <id> --exit-status`). Merge (squash) solo quando il maintainer lo chiede.
+- Mai push diretto su `main`. Mai creare o pubblicare tag o release senza un sì esplicito.
+  `.claude/settings.json` chiede conferma per questi comandi.
+- Commit, PR, commenti e testi del progetto in italiano.

@@ -1,37 +1,65 @@
+# Test e creazione degli eseguibili su ogni piattaforma supportata.
 name: Test e build
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - name: windows-x64
+            os: windows-2025
+          - name: macos-arm64
+            os: macos-26
+          - name: macos-x64
+            os: macos-26-intel
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
       - name: Installa le dipendenze
         run: pip install -e ".[dev]"
+
       - name: Test
         run: python -m pytest -q
+
       - name: Crea l'eseguibile
         run: python build.py
+
       - name: Comprimi l'app per macOS
         if: runner.os == 'macOS'
-        run: ditto -c -k --keepParent dist/MassiveRenamer.app dist/MassiveRenamer-macOS.zip
-      - uses: actions/upload-artifact@v4
+        run: ditto -c -k --keepParent dist/MassiveRenamer.app dist/MassiveRenamer-${{ matrix.name }}.zip
+
+      - name: Carica l'eseguibile
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: MassiveRenamer-${{ runner.os }}
+          name: MassiveRenamer-${{ matrix.name }}
           path: |
             dist/MassiveRenamer.exe
-            dist/MassiveRenamer-macOS.zip
+            dist/MassiveRenamer-${{ matrix.name }}.zip
           if-no-files-found: error
+          retention-days: 14

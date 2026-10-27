@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "ask": [
+      "Bash(git tag -a *)",
+      "Bash(git tag -s *)",
+      "Bash(git tag -f *)",
+      "Bash(git tag v*)",
+      "Bash(git push *--tags*)",
+      "Bash(git push origin v*)",
+      "Bash(git push * refs/tags/*)",
+      "Bash(git push origin main*)",
+      "Bash(git push * HEAD:main*)",
+      "Bash(git push *:main*)",
+      "Bash(gh release create *)",
+      "Bash(gh release edit *)",
+      "Bash(gh release delete *)",
+      "Bash(gh pr merge *)"
+    ]
+  }
+}
