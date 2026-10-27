@@ -1,0 +1,631 @@
+"""Interfaccia grafica Qt (PySide6): regole a sinistra, anteprima a destra."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, Qt, QTimer
+from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
+    QTableView,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from . import __version__, engine
+from .engine import PlanItem, Rules, Status
+from .i18n import LANGUAGES, current_language, default_language, set_language, tr
+
+SETTINGS_FILE = engine.config_dir() / "settings.json"
+JOURNAL_FILE = engine.config_dir() / "last_rename.json"
+
+STATUS_COLORS = {
+    Status.OK: QColor("#1a7f37"),
+    Status.UNCHANGED: QColor("#808080"),
+}
+PROBLEM_COLOR = QColor("#cf222e")
+
+
+def load_settings() -> dict:
+    try:
+        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(data: dict) -> None:
+    try:
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
+class PlanModel(QAbstractTableModel):
+    """Modello della tabella di anteprima: regge senza problemi decine di migliaia di righe."""
+
+    COLUMNS = ("col_old", "col_new", "col_status", "col_folder")
+
+    def __init__(self):
+        super().__init__()
+        self.plan: list[PlanItem] = []
+
+    def set_plan(self, plan: list[PlanItem]) -> None:
+        self.beginResetModel()
+        self.plan = plan
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self.plan)
+
+    def columnCount(self, parent=QModelIndex()):
+        return len(self.COLUMNS)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+            return tr(self.COLUMNS[section])
+        return None
+
+    def data(self, index, role=Qt.DisplayRole):
+        item = self.plan[index.row()]
+        col = index.column()
+        if role in (Qt.DisplayRole, Qt.ToolTipRole):
+            if col == 0:
+                return item.source.name
+            if col == 1:
+                return item.new_name
+            if col == 2:
+                text = tr(f"st_{item.status.value}")
+                if item.message:
+                    detail = tr(item.message) if item.status == Status.INVALID else item.message
+                    text += f" ({detail})"
+                return text
+            if col == 3:
+                return str(item.source.parent)
+        if role == Qt.ForegroundRole and col in (1, 2):
+            return STATUS_COLORS.get(item.status, PROBLEM_COLOR)
+        return None
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, settings: dict, initial_paths: list[str]):
+        super().__init__()
+        self.settings = settings
+        self.paths: list[Path] = []
+        self.plan: list[PlanItem] = []
+        self.model = PlanModel()
+        self.preview_timer = QTimer(self, singleShot=True, interval=150)
+        self.preview_timer.timeout.connect(self.refresh_preview)
+
+        self.setAcceptDrops(True)
+        self.resize(1200, 760)
+        self._build_ui()
+        self.set_rules(Rules.from_dict(settings.get("rules", {})))
+        self.file_options_from_settings()
+        self.add_paths([Path(p) for p in initial_paths])
+        self.refresh_preview()
+
+    # --- Costruzione dell'interfaccia ------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        self.setWindowTitle(tr("app_title"))
+        self.menuBar().clear()
+        for tb in self.findChildren(QToolBar):
+            self.removeToolBar(tb)
+            tb.deleteLater()
+
+        def action(key, slot, shortcut=None):
+            a = QAction(tr(key), self)
+            a.triggered.connect(slot)
+            if shortcut:
+                a.setShortcut(shortcut)
+            return a
+
+        self.act_add_files = action("add_files", self.choose_files, QKeySequence.Open)
+        self.act_add_folder = action("add_folder", self.choose_folder)
+        self.act_remove = action("remove", self.remove_selected, QKeySequence.Delete)
+        self.act_clear = action("clear", self.clear_list)
+        self.act_rename = action("rename", self.do_rename, "Ctrl+R")
+        self.act_undo = action("undo", self.do_undo, QKeySequence.Undo)
+        self.act_export = action("export_script", self.export_script)
+        self.act_load = action("load_preset", self.load_preset)
+        self.act_save = action("save_preset", self.save_preset)
+        self.act_reset = action("reset_rules", lambda: self.set_rules(Rules()))
+        act_quit = action("quit", self.close, QKeySequence.Quit)
+        act_quit.setMenuRole(QAction.QuitRole)
+        act_about = action("about", self.show_about)
+        act_about.setMenuRole(QAction.AboutRole)
+
+        m_file = self.menuBar().addMenu(tr("menu_file"))
+        for a in (self.act_add_files, self.act_add_folder, None, self.act_load, self.act_save,
+                  None, self.act_export, None, act_quit):
+            m_file.addSeparator() if a is None else m_file.addAction(a)
+        m_edit = self.menuBar().addMenu(tr("menu_edit"))
+        for a in (self.act_rename, self.act_undo, None, self.act_remove, self.act_clear, None, self.act_reset):
+            m_edit.addSeparator() if a is None else m_edit.addAction(a)
+        m_lang = self.menuBar().addMenu(tr("language"))
+        group = QActionGroup(self)
+        for code, label in LANGUAGES.items():
+            a = QAction(label, self, checkable=True, checked=code == current_language())
+            a.triggered.connect(lambda _=False, c=code: self.change_language(c))
+            group.addAction(a)
+            m_lang.addAction(a)
+        self.menuBar().addMenu(tr("menu_help")).addAction(act_about)
+
+        tb = QToolBar(self, movable=False)
+        tb.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        for a in (self.act_add_files, self.act_add_folder, self.act_remove, self.act_clear, None,
+                  self.act_undo, self.act_export):
+            tb.addSeparator() if a is None else tb.addAction(a)
+        self.addToolBar(tb)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self._build_rules_panel())
+        splitter.addWidget(self._build_preview_panel())
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([400, 800])
+        self.setCentralWidget(splitter)
+
+    def _changed(self, *_):
+        self.preview_timer.start()
+
+    def _line(self) -> QLineEdit:
+        w = QLineEdit()
+        w.textChanged.connect(self._changed)
+        return w
+
+    def _spin(self, minimum: int, maximum: int) -> QSpinBox:
+        w = QSpinBox()
+        w.setRange(minimum, maximum)
+        w.valueChanged.connect(self._changed)
+        return w
+
+    def _check(self, key: str) -> QCheckBox:
+        w = QCheckBox(tr(key))
+        w.toggled.connect(self._changed)
+        return w
+
+    def _combo(self, prefix: str, codes: tuple[str, ...]) -> QComboBox:
+        w = QComboBox()
+        for code in codes:
+            w.addItem(tr(f"{prefix}_{code}"), code)
+        w.currentIndexChanged.connect(self._changed)
+        return w
+
+    def _group(self, key: str, checkable: bool = False) -> tuple[QGroupBox, QFormLayout]:
+        box = QGroupBox(tr(key))
+        if checkable:
+            box.setCheckable(True)
+            box.toggled.connect(self._changed)
+        form = QFormLayout(box)
+        return box, form
+
+    def _build_rules_panel(self) -> QWidget:
+        inner = QWidget()
+        layout = QVBoxLayout(inner)
+
+        box, form = self._group("grp_replace_all", checkable=True)
+        self.g_replace_all = box
+        self.e_replace_all = self._line()
+        form.addRow(tr("replace_all_text"), self.e_replace_all)
+        layout.addWidget(box)
+
+        box, form = self._group("grp_find")
+        self.e_find, self.e_replace = self._line(), self._line()
+        self.c_match_case, self.c_regex = self._check("match_case"), self._check("use_regex")
+        form.addRow(tr("find"), self.e_find)
+        form.addRow(tr("replace_with"), self.e_replace)
+        row = QHBoxLayout()
+        row.addWidget(self.c_match_case)
+        row.addWidget(self.c_regex)
+        form.addRow(row)
+        layout.addWidget(box)
+
+        box, form = self._group("grp_trim")
+        self.s_trim_left, self.s_trim_right = self._spin(0, 255), self._spin(0, 255)
+        row = QHBoxLayout()
+        row.addWidget(QLabel(tr("trim_left")))
+        row.addWidget(self.s_trim_left)
+        row.addWidget(QLabel(tr("trim_right")))
+        row.addWidget(self.s_trim_right)
+        form.addRow(row)
+        layout.addWidget(box)
+
+        box, form = self._group("grp_case")
+        self.cb_case = self._combo("case", engine.CASE_MODES)
+        form.addRow(self.cb_case)
+        layout.addWidget(box)
+
+        box, form = self._group("grp_insert")
+        self.e_prefix, self.e_suffix = self._line(), self._line()
+        form.addRow(tr("prefix"), self.e_prefix)
+        form.addRow(tr("suffix"), self.e_suffix)
+        layout.addWidget(box)
+
+        box, form = self._group("grp_numbering", checkable=True)
+        self.g_numbering = box
+        self.s_num_start, self.s_num_step = self._spin(-999999, 999999), self._spin(-9999, 9999)
+        self.s_num_padding = self._spin(1, 12)
+        self.cb_num_position = self._combo("pos", engine.NUM_POSITIONS)
+        self.e_num_sep = self._line()
+        self.e_num_sep.setMaximumWidth(60)
+        row = QHBoxLayout()
+        for label, w in (("num_start", self.s_num_start), ("num_step", self.s_num_step), ("num_padding", self.s_num_padding)):
+            row.addWidget(QLabel(tr(label)))
+            row.addWidget(w)
+        form.addRow(row)
+        form.addRow(tr("num_position"), self.cb_num_position)
+        form.addRow(tr("num_separator"), self.e_num_sep)
+        layout.addWidget(box)
+
+        box, form = self._group("grp_ext")
+        self.cb_ext = self._combo("ext", engine.EXT_MODES)
+        self.e_ext = self._line()
+        self.cb_ext.currentIndexChanged.connect(
+            lambda: self.e_ext.setEnabled(self.cb_ext.currentData() == "replace"))
+        row = QHBoxLayout()
+        row.addWidget(self.cb_ext)
+        row.addWidget(self.e_ext)
+        form.addRow(row)
+        layout.addWidget(box)
+
+        box, form = self._group("grp_files")
+        self.e_filter = QLineEdit(placeholderText=tr("filter_placeholder"))
+        self.c_recursive = QCheckBox(tr("recursive"))
+        self.c_hidden = QCheckBox(tr("hidden"))
+        self.cb_sort = QComboBox()
+        for code in engine.SORT_KEYS:
+            self.cb_sort.addItem(tr(f"sort_{code}"), code)
+        self.c_reverse = QCheckBox(tr("sort_reverse"))
+        self.cb_sort.currentIndexChanged.connect(self.resort)
+        self.c_reverse.toggled.connect(self.resort)
+        form.addRow(tr("filter"), self.e_filter)
+        form.addRow(self.c_recursive)
+        form.addRow(self.c_hidden)
+        form.addRow(tr("sort_by"), self.cb_sort)
+        form.addRow(self.c_reverse)
+        layout.addWidget(box)
+
+        layout.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidget(inner)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(inner.sizeHint().width() + scroll.verticalScrollBar().sizeHint().width() + 4)
+        return scroll
+
+    def _build_preview_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.table = QTableView()
+        self.table.setModel(self.model)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setDefaultSectionSize(22)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setStretchLastSection(True)
+        for col, width in enumerate((260, 260, 150)):
+            self.table.setColumnWidth(col, width)
+        layout.addWidget(self.table, 1)
+
+        bottom = QHBoxLayout()
+        self.lbl_summary = QLabel()
+        self.btn_rename = QPushButton(tr("rename"))
+        self.btn_rename.setDefault(True)
+        self.btn_rename.setMinimumWidth(140)
+        self.btn_rename.clicked.connect(self.do_rename)
+        bottom.addWidget(self.lbl_summary, 1)
+        bottom.addWidget(self.btn_rename)
+        layout.addLayout(bottom)
+        return panel
+
+    # --- Regole ----------------------------------------------------------------------------
+
+    def get_rules(self) -> Rules:
+        return Rules(
+            replace_all=self.g_replace_all.isChecked(),
+            replace_all_text=self.e_replace_all.text(),
+            find=self.e_find.text(),
+            replace_with=self.e_replace.text(),
+            match_case=self.c_match_case.isChecked(),
+            use_regex=self.c_regex.isChecked(),
+            trim_left=self.s_trim_left.value(),
+            trim_right=self.s_trim_right.value(),
+            case=self.cb_case.currentData(),
+            prefix=self.e_prefix.text(),
+            suffix=self.e_suffix.text(),
+            numbering=self.g_numbering.isChecked(),
+            num_start=self.s_num_start.value(),
+            num_step=self.s_num_step.value(),
+            num_padding=self.s_num_padding.value(),
+            num_position=self.cb_num_position.currentData(),
+            num_separator=self.e_num_sep.text(),
+            ext_mode=self.cb_ext.currentData(),
+            ext_text=self.e_ext.text(),
+        )
+
+    def set_rules(self, r: Rules) -> None:
+        def select(combo: QComboBox, code: str):
+            combo.setCurrentIndex(max(0, combo.findData(code)))
+
+        self.g_replace_all.setChecked(r.replace_all)
+        self.e_replace_all.setText(r.replace_all_text)
+        self.e_find.setText(r.find)
+        self.e_replace.setText(r.replace_with)
+        self.c_match_case.setChecked(r.match_case)
+        self.c_regex.setChecked(r.use_regex)
+        self.s_trim_left.setValue(r.trim_left)
+        self.s_trim_right.setValue(r.trim_right)
+        select(self.cb_case, r.case)
+        self.e_prefix.setText(r.prefix)
+        self.e_suffix.setText(r.suffix)
+        self.g_numbering.setChecked(r.numbering)
+        self.s_num_start.setValue(r.num_start)
+        self.s_num_step.setValue(r.num_step)
+        self.s_num_padding.setValue(r.num_padding)
+        select(self.cb_num_position, r.num_position)
+        self.e_num_sep.setText(r.num_separator)
+        select(self.cb_ext, r.ext_mode)
+        self.e_ext.setText(r.ext_text)
+        self.e_ext.setEnabled(r.ext_mode == "replace")
+        self._changed()
+
+    def file_options(self) -> dict:
+        return {
+            "filter": self.e_filter.text(),
+            "recursive": self.c_recursive.isChecked(),
+            "hidden": self.c_hidden.isChecked(),
+            "sort": self.cb_sort.currentData(),
+            "reverse": self.c_reverse.isChecked(),
+        }
+
+    def file_options_from_settings(self, opts: dict | None = None) -> None:
+        opts = opts if opts is not None else self.settings.get("files", {})
+        self.e_filter.setText(opts.get("filter", ""))
+        self.c_recursive.setChecked(bool(opts.get("recursive", False)))
+        self.c_hidden.setChecked(bool(opts.get("hidden", False)))
+        self.cb_sort.setCurrentIndex(max(0, self.cb_sort.findData(opts.get("sort", "name"))))
+        self.c_reverse.setChecked(bool(opts.get("reverse", False)))
+
+    # --- Lista dei file --------------------------------------------------------------------
+
+    def add_paths(self, items: list[Path]) -> None:
+        opts = self.file_options()
+        known = {engine.name_key(p) for p in self.paths}
+        added = False
+        for item in items:
+            if item.is_dir():
+                found = engine.collect_files(item, opts["recursive"], opts["filter"], opts["hidden"])
+            elif item.is_file():
+                found = [item]
+            else:
+                continue
+            for p in found:
+                p = p.absolute()
+                key = engine.name_key(p)
+                if key not in known:
+                    known.add(key)
+                    self.paths.append(p)
+                    added = True
+        if added:
+            self.resort()
+
+    def resort(self, *_):
+        self.paths = engine.sort_paths(self.paths, self.cb_sort.currentData(), self.c_reverse.isChecked())
+        self._changed()
+
+    def choose_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, tr("select_files"), self.settings.get("last_dir", ""))
+        if files:
+            self.settings["last_dir"] = str(Path(files[0]).parent)
+            self.add_paths([Path(f) for f in files])
+
+    def choose_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, tr("select_folder"), self.settings.get("last_dir", ""))
+        if folder:
+            self.settings["last_dir"] = folder
+            self.add_paths([Path(folder)])
+
+    def remove_selected(self):
+        rows = {i.row() for i in self.table.selectionModel().selectedRows()}
+        if rows:
+            self.paths = [p for i, p in enumerate(self.paths) if i not in rows]
+            self.refresh_preview()
+
+    def clear_list(self):
+        self.paths = []
+        self.refresh_preview()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        self.add_paths([Path(u.toLocalFile()) for u in event.mimeData().urls() if u.isLocalFile()])
+
+    # --- Anteprima ed esecuzione -----------------------------------------------------------
+
+    def refresh_preview(self):
+        self.plan = engine.build_plan(self.paths, self.get_rules())
+        self.model.set_plan(self.plan)
+        ok = sum(1 for i in self.plan if i.status == Status.OK)
+        bad = sum(1 for i in self.plan if i.status not in (Status.OK, Status.UNCHANGED))
+        if self.plan:
+            self.lbl_summary.setText(tr("summary", total=len(self.plan), ok=ok, bad=bad))
+        else:
+            self.lbl_summary.setText(tr("drop_hint"))
+        self.btn_rename.setEnabled(ok > 0)
+        self.act_rename.setEnabled(ok > 0)
+        self.act_export.setEnabled(ok > 0)
+        self.act_undo.setEnabled(JOURNAL_FILE.exists())
+
+    def _replace_paths(self, mapping: dict[Path, Path]) -> None:
+        self.paths = [mapping.get(p, p) for p in self.paths]
+
+    def _report(self, result: engine.RenameResult, key: str) -> None:
+        if result.errors:
+            details = "\n".join(f"{p.name}: {msg}" for p, msg in result.errors[:20])
+            QMessageBox.warning(self, tr("done_title"), tr("done_with_errors", count=len(result.done),
+                                                            errors=len(result.errors), details=details))
+        else:
+            QMessageBox.information(self, tr("done_title"), tr(key, count=len(result.done)))
+
+    def do_rename(self):
+        self.preview_timer.stop()
+        self.refresh_preview()
+        ok = sum(1 for i in self.plan if i.status == Status.OK)
+        bad = sum(1 for i in self.plan if i.status not in (Status.OK, Status.UNCHANGED))
+        if not ok:
+            QMessageBox.information(self, tr("app_title"), tr("nothing_to_rename"))
+            return
+        text = tr("confirm_with_problems", count=ok, bad=bad) if bad else tr("confirm_rename", count=ok)
+        if QMessageBox.question(self, tr("confirm_title"), text) != QMessageBox.Yes:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            result = engine.apply_plan(self.plan)
+            if result.done:
+                engine.save_journal(JOURNAL_FILE, result.done)
+            self._replace_paths(dict(result.done))
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.refresh_preview()
+        self._report(result, "done")
+
+    def do_undo(self):
+        done = engine.load_journal(JOURNAL_FILE)
+        if not done:
+            QMessageBox.information(self, tr("app_title"), tr("undo_nothing"))
+            return
+        if QMessageBox.question(self, tr("confirm_title"), tr("confirm_undo", count=len(done))) != QMessageBox.Yes:
+            return
+        result = engine.undo(done)
+        JOURNAL_FILE.unlink(missing_ok=True)
+        self._replace_paths({new: old for old, new in result.done})
+        self.refresh_preview()
+        self._report(result, "undo_done")
+
+    def export_script(self):
+        pairs = [(i.source, i.target) for i in self.plan if i.status == Status.OK]
+        if not pairs:
+            return
+        windows = sys.platform == "win32"
+        ext = "bat" if windows else "sh"
+        name_filter = tr("script_filter_bat") if windows else tr("script_filter_sh")
+        start = os.path.join(self.settings.get("last_dir", ""), f"rinomina.{ext}")
+        path, _ = QFileDialog.getSaveFileName(self, tr("export_title"), start, name_filter)
+        if not path:
+            return
+        rename_path = Path(path)
+        if rename_path.suffix.lower() != f".{ext}":
+            rename_path = rename_path.with_name(rename_path.name + f".{ext}")
+        undo_path = rename_path.with_name(f"{rename_path.stem}-annulla.{ext}")
+        try:
+            for target, script_pairs in ((rename_path, pairs), (undo_path, [(b, a) for a, b in pairs])):
+                target.write_text(engine.generate_script(script_pairs, ext), encoding="utf-8", newline="")
+                if not windows:
+                    target.chmod(0o755)
+        except OSError as exc:
+            QMessageBox.critical(self, tr("error_title"), str(exc))
+            return
+        QMessageBox.information(self, tr("export_title"), tr("export_done", rename=rename_path, undo=undo_path))
+
+    # --- Regole salvate, lingua e chiusura --------------------------------------------------
+
+    def save_preset(self):
+        path, _ = QFileDialog.getSaveFileName(self, tr("save_preset"), "", tr("preset_filter"))
+        if path:
+            if not path.lower().endswith(".json"):
+                path += ".json"
+            data = {"massiverenamer": 1, "rules": self.get_rules().to_dict(), "files": self.file_options()}
+            try:
+                Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+            except OSError as exc:
+                QMessageBox.critical(self, tr("error_title"), str(exc))
+
+    def load_preset(self):
+        path, _ = QFileDialog.getOpenFileName(self, tr("load_preset"), "", tr("preset_filter"))
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.set_rules(Rules.from_dict(data["rules"]))
+            if isinstance(data.get("files"), dict):
+                self.file_options_from_settings(data["files"])
+        except (OSError, ValueError, KeyError, TypeError):
+            QMessageBox.critical(self, tr("error_title"), tr("preset_error"))
+
+    def change_language(self, code: str):
+        if code == current_language():
+            return
+        rules, opts = self.get_rules(), self.file_options()
+        set_language(code)
+        self.settings["language"] = code
+        self._build_ui()
+        self.set_rules(rules)
+        self.file_options_from_settings(opts)
+        self.refresh_preview()
+
+    def show_about(self):
+        QMessageBox.about(self, tr("about"), tr("about_text", version=__version__))
+
+    def closeEvent(self, event):
+        self.settings["rules"] = self.get_rules().to_dict()
+        self.settings["files"] = self.file_options()
+        save_settings(self.settings)
+        super().closeEvent(event)
+
+
+class Application(QApplication):
+    """Su macOS i file trascinati sull'icona o aperti con «Apri con» arrivano come evento, non come argomenti."""
+
+    window: MainWindow | None = None
+    pending: list[Path] = []
+
+    def event(self, event):
+        if event.type() == QEvent.FileOpen:
+            path = Path(event.file())
+            if self.window is not None:
+                self.window.add_paths([path])
+            else:
+                self.pending.append(path)
+            return True
+        return super().event(event)
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv if argv is None else argv
+    app = Application(argv)
+    app.setApplicationName("MassiveRenamer")
+    app.setOrganizationName("MassiveRenamer")
+    settings = load_settings()
+    set_language(settings.get("language") or default_language())
+    window = MainWindow(settings, [a for a in argv[1:] if not a.startswith("-")])
+    app.window = window
+    window.add_paths(app.pending)
+    window.show()
+    return app.exec()

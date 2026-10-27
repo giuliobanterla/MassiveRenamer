@@ -1,0 +1,2 @@
+[gui_scripts]
+massiverenamer = massiverenamer.gui:main
