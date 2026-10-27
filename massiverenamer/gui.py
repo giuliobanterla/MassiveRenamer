@@ -7,8 +7,8 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence
+from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import __version__, engine
+from . import DONATE_URL, __version__, engine
 from .engine import PlanItem, Rules, Status
 from .i18n import LANGUAGES, current_language, default_language, set_language, tr
 
@@ -156,6 +156,7 @@ class MainWindow(QMainWindow):
         act_quit.setMenuRole(QAction.QuitRole)
         act_about = action("about", self.show_about)
         act_about.setMenuRole(QAction.AboutRole)
+        act_donate = action("donate", self.open_donate)
 
         m_file = self.menuBar().addMenu(tr("menu_file"))
         for a in (self.act_add_files, self.act_add_folder, None, self.act_load, self.act_save,
@@ -171,7 +172,9 @@ class MainWindow(QMainWindow):
             a.triggered.connect(lambda _=False, c=code: self.change_language(c))
             group.addAction(a)
             m_lang.addAction(a)
-        self.menuBar().addMenu(tr("menu_help")).addAction(act_about)
+        m_help = self.menuBar().addMenu(tr("menu_help"))
+        m_help.addAction(act_donate)
+        m_help.addAction(act_about)
 
         tb = QToolBar(self, movable=False)
         tb.setToolButtonStyle(Qt.ToolButtonTextOnly)
@@ -591,7 +594,12 @@ class MainWindow(QMainWindow):
         self.refresh_preview()
 
     def show_about(self):
-        QMessageBox.about(self, tr("about"), tr("about_text", version=__version__))
+        text = tr("about_text", version=__version__).replace("\n", "<br>")
+        link = f'<a href="{DONATE_URL}">{DONATE_URL.removeprefix("https://")}</a>'
+        QMessageBox.about(self, tr("about"), f"<p>{text}</p><p>{tr('donate_text')}<br>{link}</p>")
+
+    def open_donate(self):
+        QDesktopServices.openUrl(QUrl(DONATE_URL))
 
     def closeEvent(self, event):
         self.settings["rules"] = self.get_rules().to_dict()
