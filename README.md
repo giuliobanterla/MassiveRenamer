@@ -53,7 +53,8 @@ I percorsi di file o cartelle passati come argomenti vengono aggiunti subito all
 - su Windows `MassiveRenamer.exe`, un file unico che non va installato
 
 Non si può creare l'eseguibile Windows da un Mac. Per questo il workflow GitHub Actions `.github/workflows/build.yml`
-esegue i test e crea entrambi gli eseguibili a ogni push su `main`. Si scaricano dalla pagina del workflow, alla voce *Artifacts*.
+esegue i test e crea gli eseguibili per Windows x64, macOS Apple Silicon (arm64) e macOS Intel (x64) a ogni pull request
+e a ogni merge su `main`. Si scaricano dalla pagina del workflow, alla voce *Artifacts*.
 
 Gli eseguibili non sono firmati. Al primo avvio:
 
@@ -75,6 +76,12 @@ Gli eseguibili non sono firmati. Al primo avvio:
 - `massiverenamer/gui.py`: interfaccia Qt (PySide6).
 - `massiverenamer/i18n.py`: testi in italiano e inglese.
 - `tests/`: test del motore.
+
+## Contribuire
+
+`main` è protetto: ogni modifica passa da un branch e da una pull request, e il merge è possibile solo
+quando i controlli `windows-x64`, `macos-arm64` e `macos-x64` sono verdi. Dependabot propone ogni lunedì
+gli aggiornamenti delle dipendenze Python e delle GitHub Actions.
 
 ## Licenza
 
