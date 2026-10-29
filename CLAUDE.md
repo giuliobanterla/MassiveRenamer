@@ -1,7 +1,7 @@
 # MassiveRenamer
 
 Rinomina molti file in una volta, su Windows e macOS; ispirato a Lupas Rename.
-Python 3.10+, interfaccia PySide6 (Qt), LGPL-2.1. Repository pubblico: tutto quello che viene
+Python 3.10+, interfaccia PySide6 (Qt), GPL-3.0 (fino alla 0.1.1 LGPL-2.1). Repository pubblico: tutto quello che viene
 committato è pubblico, quindi niente dati personali, nomi di host o segreti.
 
 ## Struttura
