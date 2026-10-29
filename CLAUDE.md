@@ -9,6 +9,7 @@ committato è pubblico, quindi niente dati personali, nomi di host o segreti.
 ```
 massiverenamer/engine.py   regole, anteprima, rinomina in due passaggi, annullamento, script; nessuna dipendenza da Qt
 massiverenamer/gui.py      interfaccia PySide6
+massiverenamer/updater.py  aggiornamento automatico dalle release GitHub (senza Qt); update_ui.py la barra
 massiverenamer/i18n.py     testi italiano/inglese
 tests/                     pytest, solo sul motore
 build.py                   eseguibile con PyInstaller (.app su macOS, .exe su Windows)
@@ -39,5 +40,8 @@ minuscole, script `.bat`/`.sh`).
 - `main` è protetto: si lavora su un branch, si apre una PR con `gh`, si aspetta la CI verde
   (`gh run watch <id> --exit-status`). Merge (squash) solo quando il maintainer lo chiede.
 - Mai push diretto su `main`. Mai creare o pubblicare tag o release senza un sì esplicito.
-  `.claude/settings.json` chiede conferma per questi comandi.
+  `.claude/settings.json` chiede conferma per questi comandi. Un tag `v*` lancia `release.yml`, che
+  pubblica la release: i programmi installati la propongono subito come aggiornamento.
+- Release: PR che aggiorna `__version__` → merge → tag annotato `vX.Y.Z` su quel commit (il workflow
+  rifiuta un tag diverso da `__version__`) → controllare gli asset e `SHA256SUMS.txt`.
 - Commit, PR, commenti e testi del progetto in italiano.

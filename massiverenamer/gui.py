@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from . import DONATE_URL, __version__, engine
 from .engine import PlanItem, Rules, Status
 from .i18n import LANGUAGES, current_language, default_language, set_language, tr
+from .update_ui import UpdateBar, UpdateController
 
 SETTINGS_FILE = engine.config_dir() / "settings.json"
 JOURNAL_FILE = engine.config_dir() / "last_rename.json"
@@ -117,6 +118,7 @@ class MainWindow(QMainWindow):
         self.model = PlanModel()
         self.preview_timer = QTimer(self, singleShot=True, interval=150)
         self.preview_timer.timeout.connect(self.refresh_preview)
+        self.updates = UpdateController(self, settings, save_settings)
 
         self.setAcceptDrops(True)
         self.resize(1200, 760)
@@ -157,6 +159,10 @@ class MainWindow(QMainWindow):
         act_about = action("about", self.show_about)
         act_about.setMenuRole(QAction.AboutRole)
         act_donate = action("donate", self.open_donate)
+        act_check = action("upd_check_now", lambda: self.updates.check(manual=True))
+        act_check.setMenuRole(QAction.ApplicationSpecificRole)
+        act_auto = QAction(tr("upd_auto"), self, checkable=True, checked=self.updates.auto)
+        act_auto.toggled.connect(self.updates.set_auto)
 
         m_file = self.menuBar().addMenu(tr("menu_file"))
         for a in (self.act_add_files, self.act_add_folder, None, self.act_load, self.act_save,
@@ -173,8 +179,8 @@ class MainWindow(QMainWindow):
             group.addAction(a)
             m_lang.addAction(a)
         m_help = self.menuBar().addMenu(tr("menu_help"))
-        m_help.addAction(act_donate)
-        m_help.addAction(act_about)
+        for a in (act_check, act_auto, None, act_donate, act_about):
+            m_help.addSeparator() if a is None else m_help.addAction(a)
 
         tb = QToolBar(self, movable=False)
         tb.setToolButtonStyle(Qt.ToolButtonTextOnly)
@@ -188,7 +194,15 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._build_preview_panel())
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([400, 800])
-        self.setCentralWidget(splitter)
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        bar = UpdateBar()
+        layout.addWidget(bar)
+        layout.addWidget(splitter, 1)
+        self.setCentralWidget(central)
+        self.updates.attach(bar)
 
     def _changed(self, *_):
         self.preview_timer.start()
@@ -636,4 +650,5 @@ def main(argv: list[str] | None = None) -> int:
     app.window = window
     window.add_paths(app.pending)
     window.show()
+    QTimer.singleShot(1500, window.updates.start)
     return app.exec()

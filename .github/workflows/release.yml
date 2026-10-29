@@ -1,0 +1,58 @@
+# Pubblica una release quando si crea un tag vX.Y.Z: test e build su tutte le piattaforme,
+# poi una release GitHub con gli eseguibili e SHA256SUMS.txt, usati dall'aggiornamento automatico.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Controlla la versione
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Il tag corrisponde a __version__
+        run: |
+          version=$(python3 -c "import massiverenamer; print(massiverenamer.__version__)")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Il tag $GITHUB_REF_NAME non corrisponde alla versione $version in massiverenamer/__init__.py"
+            exit 1
+          fi
+
+  build:
+    needs: check
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    name: Pubblica
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Scarica gli eseguibili
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: MassiveRenamer-*
+          path: artifacts
+
+      - name: Prepara i file della release
+        run: |
+          mkdir release
+          cp artifacts/MassiveRenamer-windows-x64/MassiveRenamer.exe release/MassiveRenamer-windows-x64.exe
+          cp artifacts/MassiveRenamer-macos-arm64/MassiveRenamer-macos-arm64.zip release/
+          cp artifacts/MassiveRenamer-macos-x64/MassiveRenamer-macos-x64.zip release/
+          cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Crea la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" --title "MassiveRenamer ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag
