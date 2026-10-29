@@ -126,4 +126,5 @@ MassiveRenamer è gratuito. Se ti è utile e vuoi contribuire, puoi fare una don
 
 ## Licenza
 
-GNU Lesser General Public License 2.1: vedi [LICENSE](LICENSE). È compatibile con PySide6, che usa la stessa famiglia di licenze (LGPL).
+GNU General Public License 3.0: vedi [LICENSE](LICENSE). Le dipendenze sono compatibili: PySide6/Qt (LGPL-3.0) e certifi (MPL-2.0).
+Le versioni fino alla 0.1.1 sono state pubblicate con la licenza LGPL-2.1.

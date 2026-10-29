@@ -35,7 +35,7 @@ def windows_version_file() -> Path:
       StringStruct('FileDescription', 'MassiveRenamer'),
       StringStruct('FileVersion', '{__version__}'),
       StringStruct('InternalName', 'MassiveRenamer'),
-      StringStruct('LegalCopyright', 'LGPL-2.1'),
+      StringStruct('LegalCopyright', 'GPL-3.0'),
       StringStruct('OriginalFilename', 'MassiveRenamer.exe'),
       StringStruct('ProductName', 'MassiveRenamer'),
       StringStruct('ProductVersion', '{__version__}')])]),
@@ -64,7 +64,7 @@ def stamp_version() -> None:
     with plist_path.open("rb") as f:
         plist = plistlib.load(f)
     plist["CFBundleShortVersionString"] = plist["CFBundleVersion"] = __version__
-    plist["NSHumanReadableCopyright"] = "LGPL-2.1"
+    plist["NSHumanReadableCopyright"] = "GPL-3.0"
     with plist_path.open("wb") as f:
         plistlib.dump(plist, f)
 
