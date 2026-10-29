@@ -61,6 +61,28 @@ Gli eseguibili non sono firmati. Al primo avvio:
 - **macOS**: clic destro sull'app → *Apri* → *Apri*.
 - **Windows**: in SmartScreen, *Ulteriori informazioni* → *Esegui comunque*.
 
+## Aggiornamenti automatici
+
+Al primo avvio MassiveRenamer chiede se può controllare una volta al giorno se c'è una nuova versione.
+Prima della risposta non contatta nessuno; la scelta si cambia dal menu **Aiuto** (su macOS dal menu
+dell'app), dove c'è anche **Cerca aggiornamenti…** per controllare subito.
+
+- Viene contattata solo l'API di GitHub per leggere l'ultima release di questo repository; non si inviano dati personali.
+- Il file per il proprio sistema si scarica solo dalle release di questo repository e deve avere lo stesso hash
+  indicato in `SHA256SUMS.txt` della release.
+- **Installa e riavvia**: su Windows il nuovo `.exe` prende il posto di quello attuale e parte subito; su macOS,
+  dopo la chiusura, la nuova `.app` sostituisce la vecchia (che torna al suo posto se qualcosa va storto) e si apre.
+- Se il programma gira da sorgente o la sua cartella non è scrivibile, c'è **Scarica…**, che apre la pagina della release.
+- Per provare un aggiornamento: `MASSIVERENAMER_PRETEND_VERSION=0.0.1` fa credere al programma di essere più vecchio.
+
+## Pubblicare una nuova versione
+
+1. Pull request che aggiorna `__version__` in `massiverenamer/__init__.py`, merge in `main`.
+2. Tag annotato sul commit di `main`: `git tag -a v0.2.0 -m "MassiveRenamer 0.2.0"` e `git push origin v0.2.0`.
+3. Il workflow `.github/workflows/release.yml` controlla che il tag corrisponda alla versione, esegue test e build
+   sulle tre piattaforme e pubblica la release con `MassiveRenamer-windows-x64.exe`, `MassiveRenamer-macos-arm64.zip`,
+   `MassiveRenamer-macos-x64.zip` e `SHA256SUMS.txt`. Da quel momento i programmi installati la propongono.
+
 ## Dove salva i dati
 
 | Sistema | Cartella |
@@ -68,12 +90,13 @@ Gli eseguibili non sono firmati. Al primo avvio:
 | Windows | `%APPDATA%\MassiveRenamer` |
 | macOS | `~/Library/Application Support/MassiveRenamer` |
 
-`settings.json` contiene lingua, ultime regole e opzioni. `last_rename.json` contiene l'ultima rinomina, per poterla annullare.
+`settings.json` contiene lingua, ultime regole, opzioni e scelta sugli aggiornamenti. `last_rename.json` contiene l'ultima rinomina, per poterla annullare.
 
 ## Struttura
 
 - `massiverenamer/engine.py`: regole, anteprima, rinomina, annullamento e script. Non dipende dall'interfaccia.
 - `massiverenamer/gui.py`: interfaccia Qt (PySide6).
+- `massiverenamer/updater.py` e `update_ui.py`: aggiornamento automatico.
 - `massiverenamer/i18n.py`: testi in italiano e inglese.
 - `tests/`: test del motore.
 
