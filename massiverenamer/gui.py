@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -644,6 +644,7 @@ def main(argv: list[str] | None = None) -> int:
     app = Application(argv)
     app.setApplicationName("MassiveRenamer")
     app.setOrganizationName("MassiveRenamer")
+    app.setWindowIcon(QIcon(str(Path(__file__).with_name("resources") / "icon.png")))
     settings = load_settings()
     set_language(settings.get("language") or default_language())
     window = MainWindow(settings, [a for a in argv[1:] if not a.startswith("-")])

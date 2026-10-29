@@ -19,5 +19,8 @@ massiverenamer = "massiverenamer.gui:main"
 [tool.setuptools]
 packages = ["massiverenamer"]
 
+[tool.setuptools.package-data]
+massiverenamer = ["resources/*.png"]
+
 [tool.setuptools.dynamic]
 version = { attr = "massiverenamer.__version__" }

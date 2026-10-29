@@ -56,10 +56,21 @@ Non si può creare l'eseguibile Windows da un Mac. Per questo il workflow GitHub
 esegue i test e crea gli eseguibili per Windows x64, macOS Apple Silicon (arm64) e macOS Intel (x64) a ogni pull request
 e a ogni merge su `main`. Si scaricano dalla pagina del workflow, alla voce *Artifacts*.
 
-Gli eseguibili non sono firmati. Al primo avvio:
+**Firma.** Nelle release l'app per macOS è firmata con un Developer ID e notarizzata da Apple, quindi si apre
+senza avvisi. Le build delle pull request hanno solo la firma ad-hoc: al primo avvio clic destro sull'app → *Apri*.
+L'eseguibile per Windows non è firmato: in SmartScreen, *Ulteriori informazioni* → *Esegui comunque*.
 
-- **macOS**: clic destro sull'app → *Apri* → *Apri*.
-- **Windows**: in SmartScreen, *Ulteriori informazioni* → *Esegui comunque*.
+La firma su macOS la fa `build.py` se trova queste variabili d'ambiente (in CI arrivano dai segreti del repository,
+solo nel workflow di release):
+
+| Variabile | Segreto | Contenuto |
+|---|---|---|
+| `MACOS_SIGN_IDENTITY` | `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PASSWORD` | certificato Developer ID (.p12 in base64) e la sua password |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | stessi nomi | account Apple, team e password specifica per app per la notarizzazione |
+
+Senza segreti la release viene pubblicata lo stesso, con la sola firma ad-hoc.
+
+**Icona.** `tools/make_icons.py` la disegna e la salva in `assets/icon/` (PNG, `.ico`, `.icns`) e in `massiverenamer/resources/`.
 
 ## Aggiornamenti automatici
 
@@ -70,6 +81,8 @@ dell'app), dove c'è anche **Cerca aggiornamenti…** per controllare subito.
 - Viene contattata solo l'API di GitHub per leggere l'ultima release di questo repository; non si inviano dati personali.
 - Il file per il proprio sistema si scarica solo dalle release di questo repository e deve avere lo stesso hash
   indicato in `SHA256SUMS.txt` della release.
+- Su macOS, se l'app in uso è firmata con un Developer ID, la nuova deve essere firmata dallo stesso team e
+  notarizzata, altrimenti l'aggiornamento viene rifiutato.
 - **Installa e riavvia**: su Windows il nuovo `.exe` prende il posto di quello attuale e parte subito; su macOS,
   dopo la chiusura, la nuova `.app` sostituisce la vecchia (che torna al suo posto se qualcosa va storto) e si apre.
 - Se il programma gira da sorgente o la sua cartella non è scrivibile, c'è **Scarica…**, che apre la pagina della release.
