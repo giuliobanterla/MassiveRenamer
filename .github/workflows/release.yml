@@ -28,6 +28,9 @@ jobs:
   build:
     needs: check
     uses: ./.github/workflows/build.yml
+    with:
+      sign: true
+    secrets: inherit
 
   publish:
     name: Pubblica

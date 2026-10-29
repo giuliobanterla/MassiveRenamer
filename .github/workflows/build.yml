@@ -7,6 +7,11 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call: # usato da release.yml
+    inputs:
+      sign:
+        description: Firma e notarizza l'app per macOS
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,7 +24,8 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # La notarizzazione aspetta Apple: la prima può richiedere mezz'ora
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -48,7 +54,34 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+      - name: Importa il certificato Developer ID
+        if: runner.os == 'macOS' && inputs.sign
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_CERTIFICATE" ]; then
+            echo "::warning::Segreto MACOS_CERTIFICATE assente: l'app avrà solo la firma ad-hoc"
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
+          echo "MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          rm "$RUNNER_TEMP/certificate.p12"
+
       - name: Crea l'eseguibile
+        env:
+          APPLE_ID: ${{ inputs.sign && secrets.APPLE_ID || '' }}
+          APPLE_TEAM_ID: ${{ inputs.sign && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_APP_PASSWORD: ${{ inputs.sign && secrets.APPLE_APP_PASSWORD || '' }}
         run: python build.py
 
       - name: Comprimi l'app per macOS

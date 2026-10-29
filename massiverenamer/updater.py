@@ -249,6 +249,24 @@ def app_version(app: Path) -> str | None:
         return None
 
 
+def signing_team(app: Path) -> str | None:
+    """Team ID del Developer ID che ha firmato la .app, o None (firma ad-hoc o assente)."""
+    result = subprocess.run(["codesign", "-dv", str(app)], capture_output=True, text=True)
+    m = re.search(r"^TeamIdentifier=(\w+)$", result.stderr, re.MULTILINE)
+    return m.group(1) if result.returncode == 0 and m and m.group(1) != "not" else None
+
+
+def verify_macos_signature(app: Path, team: str) -> None:
+    """La nuova .app deve essere firmata dallo stesso team e accettata da Gatekeeper (notarizzata)."""
+    requirement = f'=anchor apple generic and certificate leaf[subject.OU] = "{team}"'
+    checks = (["codesign", "--verify", "--deep", "--strict", "-R", requirement, str(app)],
+              ["spctl", "--assess", "--type", "execute", str(app)])
+    for cmd in checks:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise UpdateError(f"firma non valida ({cmd[0]}): {result.stderr.strip()}")
+
+
 def macos_swap_script(pid: int, app: Path, new_app: Path, work: Path) -> str:
     """Script che aspetta la chiusura dell'app, sostituisce la .app, rimette la vecchia se qualcosa
     va storto e apre quella nuova."""
@@ -281,6 +299,10 @@ def install_macos(release: Release, app: Path, progress=None) -> None:
         found = app_version(new_app)
         if found != release.version:
             raise UpdateError(f"l'app scaricata ha versione {found!r} invece di {release.version}")
+        # Un'app firmata accetta solo aggiornamenti firmati e notarizzati dallo stesso team.
+        team = signing_team(app)
+        if team:
+            verify_macos_signature(new_app, team)
         script = work / "swap.sh"
         script.write_text(macos_swap_script(os.getpid(), app, new_app, work), encoding="utf-8")
     except UpdateError:

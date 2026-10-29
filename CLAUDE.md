@@ -12,7 +12,9 @@ massiverenamer/gui.py      interfaccia PySide6
 massiverenamer/updater.py  aggiornamento automatico dalle release GitHub (senza Qt); update_ui.py la barra
 massiverenamer/i18n.py     testi italiano/inglese
 tests/                     pytest, solo sul motore
-build.py                   eseguibile con PyInstaller (.app su macOS, .exe su Windows)
+build.py                   eseguibile con PyInstaller (.app su macOS, .exe su Windows); firma e notarizza su macOS
+tools/make_icons.py        disegna l'icona (assets/icon/, massiverenamer/resources/)
+packaging/macos/           entitlements per l'hardened runtime
 ```
 
 ## Build e test
@@ -42,6 +44,9 @@ minuscole, script `.bat`/`.sh`).
 - Mai push diretto su `main`. Mai creare o pubblicare tag o release senza un sì esplicito.
   `.claude/settings.json` chiede conferma per questi comandi. Un tag `v*` lancia `release.yml`, che
   pubblica la release: i programmi installati la propongono subito come aggiornamento.
+- Firma macOS: Developer ID team `D3694MQ8D9` (lo stesso di GBFileCopier); segreti del repository solo nel
+  workflow di release. In locale: `MACOS_SIGN_IDENTITY="Developer ID Application: Giulio Banterla (D3694MQ8D9)" .venv/bin/python build.py`
+  (firma senza notarizzare). Windows non è firmato.
 - Release: PR che aggiorna `__version__` → merge → tag annotato `vX.Y.Z` su quel commit (il workflow
   rifiuta un tag diverso da `__version__`) → controllare gli asset e `SHA256SUMS.txt`.
 - Commit, PR, commenti e testi del progetto in italiano.

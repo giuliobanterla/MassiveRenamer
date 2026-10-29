@@ -151,3 +151,11 @@ def test_translations_complete():
     for key, text in i18n.STRINGS["it"].items():
         placeholders = lambda s: sorted(re.findall(r"\{(\w+)\}", s))
         assert placeholders(text) == placeholders(i18n.STRINGS["en"][key]), key
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="codesign")
+def test_macos_signature_checks(tmp_path):
+    app = make_app(tmp_path / "Unsigned.app", "1.0.0")
+    assert updater.signing_team(app) is None
+    with pytest.raises(UpdateError):
+        updater.verify_macos_signature(app, "D3694MQ8D9")
