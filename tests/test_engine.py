@@ -1,11 +1,13 @@
 import os
+import struct
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from massiverenamer import engine
+from massiverenamer import engine, exif
 from massiverenamer.engine import Renamer, Rules, Status, build_plan, split_name, validate_name
 
 
@@ -169,3 +171,67 @@ def test_collect_and_sort(tmp_path):
 def test_rules_from_dict_ignores_bad_data():
     r = Rules.from_dict({"prefix": "x", "trim_left": "nope", "unknown": 1})
     assert r.prefix == "x" and r.trim_left == 0
+
+
+def test_multiple_replacements():
+    r = dict(find="a", replace_with="b", replacements=[["b", "c"], ["", "ignored"], ["x", "y"]])
+    assert rename("ax.txt", **r) == "cy.txt"
+    assert Rules.from_dict({"replacements": [["a", "b"], "bad", [1, 2, 3]]}).replacements == [["a", "b"]]
+
+
+def test_remove_at_position():
+    assert rename("abcdef.txt", remove_pos=2, remove_count=3) == "aef.txt"
+    assert rename("abcdef.txt", remove_pos=1, remove_count=2, remove_from_end=True) == "abcd.txt"
+    assert rename("abcdef.txt", remove_pos=2, remove_count=2, remove_from_end=True) == "abcf.txt"
+    assert rename("abc.txt", remove_pos=10, remove_count=2) == "abc.txt"
+
+
+def test_insert_at_position():
+    assert rename("abcdef.txt", insert_text="-", insert_pos=2) == "ab-cdef.txt"
+    assert rename("abcdef.txt", insert_text="-", insert_pos=2, insert_from_end=True) == "abcd-ef.txt"
+    assert rename("abc.txt", insert_text="-", insert_pos=99) == "abc-.txt"
+
+
+def test_date_rules(tmp_path):
+    (p,) = make(tmp_path, "foto.jpg")
+    stamp = datetime(2024, 7, 15, 10, 30).timestamp()
+    os.utime(p, (stamp, stamp))
+    r = Renamer(Rules(date_mode="modified"))
+    assert r.new_name(p.name, 0, p) == "2024-07-15_foto.jpg"
+    r = Renamer(Rules(date_mode="modified", date_format="%Y%m%d-%H%M", date_position="after", date_separator=" "))
+    assert r.new_name(p.name, 0, p) == "foto 20240715-1030.jpg"
+    # Senza EXIF la data di scatto diventa quella di modifica
+    assert Renamer(Rules(date_mode="taken", date_position="replace")).new_name(p.name, 0, p) == "2024-07-15.jpg"
+    assert Renamer(Rules(date_mode="created")).new_name(p.name, 0, p).endswith("_foto.jpg")
+    # Una "/" nel formato darebbe un nome non valido: l'anteprima lo segnala
+    plan = build_plan([p], Rules(date_mode="modified", date_format="%d/%m/%Y"))
+    assert plan[0].status == Status.INVALID
+
+
+def jpeg_with_exif(date: str, original: bool = True) -> bytes:
+    """JPEG minimo con un segmento EXIF (TIFF little endian) che contiene la data."""
+    value = date.encode() + b"\0"
+    if original:
+        # IFD0 con il puntatore all'IFD EXIF, che contiene DateTimeOriginal
+        ifd0 = struct.pack("<H", 1) + struct.pack("<HHII", 0x8769, 4, 1, 26) + b"\0\0\0\0"
+        exif = struct.pack("<H", 1) + struct.pack("<HHII", 0x9003, 2, len(value), 44) + b"\0\0\0\0"
+        tiff = b"II*\0" + struct.pack("<I", 8) + ifd0 + exif + value
+    else:
+        ifd0 = struct.pack("<H", 1) + struct.pack("<HHII", 0x0132, 2, len(value), 26) + b"\0\0\0\0"
+        tiff = b"II*\0" + struct.pack("<I", 8) + ifd0 + value
+    app1 = b"Exif\0\0" + tiff
+    return b"\xff\xd8" + b"\xff\xe0\x00\x04ab" + b"\xff\xe1" + struct.pack(">H", len(app1) + 2) + app1 + b"\xff\xda"
+
+
+def test_exif_date_taken(tmp_path):
+    photo = tmp_path / "IMG_1.jpg"
+    photo.write_bytes(jpeg_with_exif("2019:05:04 08:09:10"))
+    assert exif.date_taken(photo) == datetime(2019, 5, 4, 8, 9, 10)
+    assert Renamer(Rules(date_mode="taken", date_format="%Y-%m-%d %H.%M")).new_name(photo.name, 0, photo) == "2019-05-04 08.09_IMG_1.jpg"
+    photo.write_bytes(jpeg_with_exif("2018:01:02 03:04:05", original=False))
+    assert exif.date_taken(photo) == datetime(2018, 1, 2, 3, 4, 5)
+    photo.write_bytes(b"\xff\xd8\xff\xe1\x00\x02")  # troncato
+    assert exif.date_taken(photo) is None
+    (tmp_path / "x.txt").write_text("hello")
+    assert exif.date_taken(tmp_path / "x.txt") is None
+    assert exif.date_taken(tmp_path / "missing.jpg") is None

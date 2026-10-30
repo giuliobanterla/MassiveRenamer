@@ -11,7 +11,10 @@ massiverenamer/engine.py   regole, anteprima, rinomina in due passaggi, annullam
 massiverenamer/gui.py      interfaccia PySide6
 massiverenamer/updater.py  aggiornamento automatico dalle release GitHub (senza Qt); update_ui.py la barra
 massiverenamer/i18n.py     testi italiano/inglese
-tests/                     pytest, solo sul motore
+massiverenamer/integration.py  menu del tasto destro (registro HKCU su Windows, Azione rapida su macOS)
+massiverenamer/single_instance.py  un secondo avvio passa i file alla finestra aperta (QLockFile + QLocalServer)
+massiverenamer/exif.py     data di scatto da JPEG/TIFF senza dipendenze
+tests/                     pytest: motore, aggiornamento, integrazione (l'interfaccia si prova a mano)
 build.py                   eseguibile con PyInstaller (.app su macOS, .exe su Windows); firma e notarizza su macOS
 tools/make_icons.py        disegna l'icona (assets/icon/, massiverenamer/resources/)
 packaging/macos/           entitlements per l'hardened runtime
@@ -28,6 +31,8 @@ python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 
 - Ogni nuovo testo dell'interfaccia va in `i18n.py` in **entrambe** le lingue.
 - La logica sta in `engine.py`, testabile senza interfaccia; `gui.py` resta un sottile strato sopra.
+- Per vedere cosa riceve l'app impacchettata (Azione rapida, `open -a`, secondo avvio):
+  `MASSIVERENAMER_DEBUG_LOG=/tmp/mr.log dist/MassiveRenamer.app/Contents/MacOS/MassiveRenamer`.
 
 ## Piattaforme
 

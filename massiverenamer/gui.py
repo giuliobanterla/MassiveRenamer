@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QTableView,
+    QTableWidget,
+    QTableWidgetItem,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -36,6 +38,8 @@ from PySide6.QtWidgets import (
 from . import DONATE_URL, __version__, engine
 from .engine import PlanItem, Rules, Status
 from .i18n import LANGUAGES, current_language, default_language, set_language, tr
+from . import integration
+from .single_instance import SingleInstance
 from .update_ui import UpdateBar, UpdateController
 
 SETTINGS_FILE = engine.config_dir() / "settings.json"
@@ -46,6 +50,17 @@ STATUS_COLORS = {
     Status.UNCHANGED: QColor("#808080"),
 }
 PROBLEM_COLOR = QColor("#cf222e")
+
+
+def debug_log(message: str) -> None:
+    """Registro di diagnostica, attivo solo se MASSIVERENAMER_DEBUG_LOG indica un file."""
+    path = os.environ.get("MASSIVERENAMER_DEBUG_LOG")
+    if path:
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(message + "\n")
+        except OSError:
+            pass
 
 
 def load_settings() -> dict:
@@ -114,10 +129,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = settings
         self.paths: list[Path] = []
+        self.sources: list[Path] = []  # file e cartelle aggiunti dall'utente
+        self.excluded: set[str] = set()  # file tolti a mano dalla lista
         self.plan: list[PlanItem] = []
         self.model = PlanModel()
         self.preview_timer = QTimer(self, singleShot=True, interval=150)
         self.preview_timer.timeout.connect(self.refresh_preview)
+        self.rescan_timer = QTimer(self, singleShot=True, interval=400)
+        self.rescan_timer.timeout.connect(self.rebuild_list)
         self.updates = UpdateController(self, settings, save_settings)
 
         self.setAcceptDrops(True)
@@ -148,12 +167,19 @@ class MainWindow(QMainWindow):
         self.act_add_folder = action("add_folder", self.choose_folder)
         self.act_remove = action("remove", self.remove_selected, QKeySequence.Delete)
         self.act_clear = action("clear", self.clear_list)
+        self.act_clear.setShortcuts([QKeySequence("Ctrl+Shift+Backspace"), QKeySequence("Ctrl+Shift+Delete")])
         self.act_rename = action("rename", self.do_rename, "Ctrl+R")
         self.act_undo = action("undo", self.do_undo, QKeySequence.Undo)
         self.act_export = action("export_script", self.export_script)
         self.act_load = action("load_preset", self.load_preset)
         self.act_save = action("save_preset", self.save_preset)
         self.act_reset = action("reset_rules", lambda: self.set_rules(Rules()))
+        self.act_context = QAction(tr("context_menu"), self, checkable=True)
+        self.act_context.setEnabled(integration.supported())
+        self.act_context.setChecked(integration.is_installed())
+        self.act_context.toggled.connect(self.toggle_context_menu)
+        if not integration.supported():
+            self.act_context.setToolTip(tr("context_unsupported"))
         act_quit = action("quit", self.close, QKeySequence.Quit)
         act_quit.setMenuRole(QAction.QuitRole)
         act_about = action("about", self.show_about)
@@ -166,7 +192,7 @@ class MainWindow(QMainWindow):
 
         m_file = self.menuBar().addMenu(tr("menu_file"))
         for a in (self.act_add_files, self.act_add_folder, None, self.act_load, self.act_save,
-                  None, self.act_export, None, act_quit):
+                  None, self.act_export, None, self.act_context, None, act_quit):
             m_file.addSeparator() if a is None else m_file.addAction(a)
         m_edit = self.menuBar().addMenu(tr("menu_edit"))
         for a in (self.act_rename, self.act_undo, None, self.act_remove, self.act_clear, None, self.act_reset):
@@ -215,7 +241,12 @@ class MainWindow(QMainWindow):
     def _spin(self, minimum: int, maximum: int) -> QSpinBox:
         w = QSpinBox()
         w.setRange(minimum, maximum)
+        w.setKeyboardTracking(True)
+        # Il valore scritto a mano deve contare subito, non solo dopo le frecce
         w.valueChanged.connect(self._changed)
+        w.lineEdit().textEdited.connect(self._changed)
+        w.editingFinished.connect(self._changed)
+        self._spins.append(w)
         return w
 
     def _check(self, key: str) -> QCheckBox:
@@ -239,6 +270,7 @@ class MainWindow(QMainWindow):
         return box, form
 
     def _build_rules_panel(self) -> QWidget:
+        self._spins: list[QSpinBox] = []
         inner = QWidget()
         layout = QVBoxLayout(inner)
 
@@ -257,6 +289,32 @@ class MainWindow(QMainWindow):
         row.addWidget(self.c_match_case)
         row.addWidget(self.c_regex)
         form.addRow(row)
+        self.t_replacements = QTableWidget(0, 2)
+        self.t_replacements.setHorizontalHeaderLabels([tr("find").rstrip(":"), tr("replace_with").rstrip(":")])
+        self.t_replacements.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.t_replacements.verticalHeader().hide()
+        self.t_replacements.setMaximumHeight(110)
+        self.t_replacements.itemChanged.connect(self._changed)
+        add_row, del_row = QPushButton(tr("add_row")), QPushButton(tr("remove_row"))
+        add_row.clicked.connect(lambda: self._add_replacement_row("", ""))
+        del_row.clicked.connect(self._remove_replacement_row)
+        row = QHBoxLayout()
+        row.addWidget(QLabel(tr("more_replacements")), 1)
+        row.addWidget(add_row)
+        row.addWidget(del_row)
+        form.addRow(row)
+        form.addRow(self.t_replacements)
+        layout.addWidget(box)
+
+        box, form = self._group("grp_remove")
+        self.s_remove_pos, self.s_remove_count = self._spin(1, 255), self._spin(0, 255)
+        self.c_remove_end = self._check("from_end")
+        row = QHBoxLayout()
+        for label, w in (("remove_pos", self.s_remove_pos), ("remove_count", self.s_remove_count)):
+            row.addWidget(QLabel(tr(label)))
+            row.addWidget(w)
+        form.addRow(row)
+        form.addRow(self.c_remove_end)
         layout.addWidget(box)
 
         box, form = self._group("grp_trim")
@@ -269,6 +327,17 @@ class MainWindow(QMainWindow):
         form.addRow(row)
         layout.addWidget(box)
 
+        box, form = self._group("grp_insert_at")
+        self.e_insert_text = self._line()
+        self.s_insert_pos = self._spin(0, 255)
+        self.c_insert_end = self._check("from_end")
+        form.addRow(tr("insert_text"), self.e_insert_text)
+        row = QHBoxLayout()
+        row.addWidget(self.s_insert_pos)
+        row.addWidget(self.c_insert_end, 1)
+        form.addRow(tr("insert_pos"), row)
+        layout.addWidget(box)
+
         box, form = self._group("grp_case")
         self.cb_case = self._combo("case", engine.CASE_MODES)
         form.addRow(self.cb_case)
@@ -278,6 +347,23 @@ class MainWindow(QMainWindow):
         self.e_prefix, self.e_suffix = self._line(), self._line()
         form.addRow(tr("prefix"), self.e_prefix)
         form.addRow(tr("suffix"), self.e_suffix)
+        layout.addWidget(box)
+
+        box, form = self._group("grp_date")
+        self.cb_date = self._combo("date", engine.DATE_MODES)
+        self.e_date_format = self._line()
+        self.e_date_format.setToolTip(tr("date_format_help"))
+        self.cb_date_position = self._combo("pos", engine.NUM_POSITIONS)
+        self.e_date_sep = self._line()
+        self.e_date_sep.setMaximumWidth(60)
+        form.addRow(self.cb_date)
+        form.addRow(tr("date_format"), self.e_date_format)
+        row = QHBoxLayout()
+        row.addWidget(self.cb_date_position, 1)
+        row.addWidget(QLabel(tr("num_separator")))
+        row.addWidget(self.e_date_sep)
+        form.addRow(tr("num_position"), row)
+        self.cb_date.currentIndexChanged.connect(self._update_date_fields)
         layout.addWidget(box)
 
         box, form = self._group("grp_numbering", checkable=True)
@@ -311,6 +397,10 @@ class MainWindow(QMainWindow):
         self.e_filter = QLineEdit(placeholderText=tr("filter_placeholder"))
         self.c_recursive = QCheckBox(tr("recursive"))
         self.c_hidden = QCheckBox(tr("hidden"))
+        # Filtro e opzioni valgono anche per i file già in lista: si ricalcola la lista
+        self.e_filter.textChanged.connect(lambda: self.rescan_timer.start())
+        self.c_recursive.toggled.connect(self.rebuild_list)
+        self.c_hidden.toggled.connect(self.rebuild_list)
         self.cb_sort = QComboBox()
         for code in engine.SORT_KEYS:
             self.cb_sort.addItem(tr(f"sort_{code}"), code)
@@ -355,14 +445,49 @@ class MainWindow(QMainWindow):
         self.btn_rename.setDefault(True)
         self.btn_rename.setMinimumWidth(140)
         self.btn_rename.clicked.connect(self.do_rename)
+        self.btn_clear = QPushButton(tr("clear"))
+        self.btn_clear.setToolTip(self.act_clear.shortcut().toString(QKeySequence.NativeText))
+        self.btn_clear.clicked.connect(self.clear_list)
         bottom.addWidget(self.lbl_summary, 1)
+        bottom.addWidget(self.btn_clear)
         bottom.addWidget(self.btn_rename)
         layout.addLayout(bottom)
         return panel
 
     # --- Regole ----------------------------------------------------------------------------
 
+    def _add_replacement_row(self, find: str, replace: str) -> None:
+        row = self.t_replacements.rowCount()
+        self.t_replacements.insertRow(row)
+        self.t_replacements.setItem(row, 0, QTableWidgetItem(find))
+        self.t_replacements.setItem(row, 1, QTableWidgetItem(replace))
+        if not find:
+            self.t_replacements.editItem(self.t_replacements.item(row, 0))
+
+    def _remove_replacement_row(self) -> None:
+        rows = sorted({i.row() for i in self.t_replacements.selectedIndexes()} or {self.t_replacements.rowCount() - 1})
+        for row in reversed(rows):
+            if row >= 0:
+                self.t_replacements.removeRow(row)
+        self._changed()
+
+    def _replacement_pairs(self) -> list[list[str]]:
+        pairs = []
+        for row in range(self.t_replacements.rowCount()):
+            cells = [self.t_replacements.item(row, c) for c in (0, 1)]
+            find, replace = (c.text() if c else "" for c in cells)
+            if find:
+                pairs.append([find, replace])
+        return pairs
+
+    def _update_date_fields(self) -> None:
+        on = self.cb_date.currentData() != "none"
+        for w in (self.e_date_format, self.cb_date_position, self.e_date_sep):
+            w.setEnabled(on)
+
     def get_rules(self) -> Rules:
+        for spin in self._spins:
+            spin.interpretText()
         return Rules(
             replace_all=self.g_replace_all.isChecked(),
             replace_all_text=self.e_replace_all.text(),
@@ -370,11 +495,22 @@ class MainWindow(QMainWindow):
             replace_with=self.e_replace.text(),
             match_case=self.c_match_case.isChecked(),
             use_regex=self.c_regex.isChecked(),
+            replacements=self._replacement_pairs(),
+            remove_pos=self.s_remove_pos.value(),
+            remove_count=self.s_remove_count.value(),
+            remove_from_end=self.c_remove_end.isChecked(),
             trim_left=self.s_trim_left.value(),
             trim_right=self.s_trim_right.value(),
+            insert_text=self.e_insert_text.text(),
+            insert_pos=self.s_insert_pos.value(),
+            insert_from_end=self.c_insert_end.isChecked(),
             case=self.cb_case.currentData(),
             prefix=self.e_prefix.text(),
             suffix=self.e_suffix.text(),
+            date_mode=self.cb_date.currentData(),
+            date_format=self.e_date_format.text(),
+            date_position=self.cb_date_position.currentData(),
+            date_separator=self.e_date_sep.text(),
             numbering=self.g_numbering.isChecked(),
             num_start=self.s_num_start.value(),
             num_step=self.s_num_step.value(),
@@ -395,11 +531,27 @@ class MainWindow(QMainWindow):
         self.e_replace.setText(r.replace_with)
         self.c_match_case.setChecked(r.match_case)
         self.c_regex.setChecked(r.use_regex)
+        self.t_replacements.blockSignals(True)
+        self.t_replacements.setRowCount(0)
+        for find, replace in r.replacements:
+            self._add_replacement_row(find, replace)
+        self.t_replacements.blockSignals(False)
+        self.s_remove_pos.setValue(r.remove_pos)
+        self.s_remove_count.setValue(r.remove_count)
+        self.c_remove_end.setChecked(r.remove_from_end)
         self.s_trim_left.setValue(r.trim_left)
         self.s_trim_right.setValue(r.trim_right)
+        self.e_insert_text.setText(r.insert_text)
+        self.s_insert_pos.setValue(r.insert_pos)
+        self.c_insert_end.setChecked(r.insert_from_end)
         select(self.cb_case, r.case)
         self.e_prefix.setText(r.prefix)
         self.e_suffix.setText(r.suffix)
+        select(self.cb_date, r.date_mode)
+        self.e_date_format.setText(r.date_format)
+        select(self.cb_date_position, r.date_position)
+        self.e_date_sep.setText(r.date_separator)
+        self._update_date_fields()
         self.g_numbering.setChecked(r.numbering)
         self.s_num_start.setValue(r.num_start)
         self.s_num_step.setValue(r.num_step)
@@ -431,25 +583,45 @@ class MainWindow(QMainWindow):
     # --- Lista dei file --------------------------------------------------------------------
 
     def add_paths(self, items: list[Path]) -> None:
-        opts = self.file_options()
-        known = {engine.name_key(p) for p in self.paths}
+        """Ricorda file e cartelle aggiunti: la lista si ricalcola da loro quando cambiano filtro e opzioni."""
+        known = {engine.name_key(s) for s in self.sources}
         added = False
         for item in items:
-            if item.is_dir():
-                found = engine.collect_files(item, opts["recursive"], opts["filter"], opts["hidden"])
-            elif item.is_file():
-                found = [item]
-            else:
+            item = item.absolute()
+            key = engine.name_key(item)
+            if not (item.is_dir() or item.is_file()):
                 continue
-            for p in found:
-                p = p.absolute()
-                key = engine.name_key(p)
-                if key not in known:
-                    known.add(key)
-                    self.paths.append(p)
-                    added = True
+            # Riaggiungere un file o una cartella riporta in lista anche ciò che era stato tolto a mano
+            restored = {k for k in self.excluded if k == key or k.startswith(key + os.sep)}
+            if restored:
+                self.excluded -= restored
+                added = True
+            if key not in known:
+                known.add(key)
+                self.sources.append(item)
+                added = True
         if added:
-            self.resort()
+            self.rebuild_list()
+
+    def rebuild_list(self, *_):
+        opts = self.file_options()
+        known: set[str] = set()
+        paths: list[Path] = []
+        for source in self.sources:
+            if source.is_dir():
+                found = engine.collect_files(source, opts["recursive"], opts["filter"], opts["hidden"])
+            elif source.is_file() and engine.matches_filter(source.name, opts["filter"]):
+                found = [source]
+            else:
+                found = []
+            for p in found:
+                key = engine.name_key(p)
+                if key not in known and key not in self.excluded:
+                    known.add(key)
+                    paths.append(p)
+        self.paths = paths
+        debug_log(f"lista: {[p.name for p in paths]}")
+        self.resort()
 
     def resort(self, *_):
         self.paths = engine.sort_paths(self.paths, self.cb_sort.currentData(), self.c_reverse.isChecked())
@@ -470,11 +642,12 @@ class MainWindow(QMainWindow):
     def remove_selected(self):
         rows = {i.row() for i in self.table.selectionModel().selectedRows()}
         if rows:
+            self.excluded.update(engine.name_key(p) for i, p in enumerate(self.paths) if i in rows)
             self.paths = [p for i, p in enumerate(self.paths) if i not in rows]
             self.refresh_preview()
 
     def clear_list(self):
-        self.paths = []
+        self.paths, self.sources, self.excluded = [], [], set()
         self.refresh_preview()
 
     def dragEnterEvent(self, event):
@@ -502,6 +675,7 @@ class MainWindow(QMainWindow):
 
     def _replace_paths(self, mapping: dict[Path, Path]) -> None:
         self.paths = [mapping.get(p, p) for p in self.paths]
+        self.sources = [mapping.get(p, p) for p in self.sources]
 
     def _report(self, result: engine.RenameResult, key: str) -> None:
         if result.errors:
@@ -607,6 +781,17 @@ class MainWindow(QMainWindow):
         self.file_options_from_settings(opts)
         self.refresh_preview()
 
+    def toggle_context_menu(self, on: bool):
+        try:
+            integration.install(tr("context_label")) if on else integration.uninstall()
+        except OSError as exc:
+            QMessageBox.critical(self, tr("error_title"), str(exc))
+        self.act_context.blockSignals(True)
+        self.act_context.setChecked(integration.is_installed())
+        self.act_context.blockSignals(False)
+        if on and integration.is_installed():
+            QMessageBox.information(self, tr("context_menu"), tr("context_done_win" if sys.platform == "win32" else "context_done_mac"))
+
     def show_about(self):
         text = tr("about_text", version=__version__).replace("\n", "<br>")
         link = f'<a href="{DONATE_URL}">{DONATE_URL.removeprefix("https://")}</a>'
@@ -630,13 +815,19 @@ class Application(QApplication):
 
     def event(self, event):
         if event.type() == QEvent.FileOpen:
-            path = Path(event.file())
-            if self.window is not None:
-                self.window.add_paths([path])
-            else:
-                self.pending.append(path)
+            self.open_paths([Path(event.file())])
             return True
         return super().event(event)
+
+    def open_paths(self, paths: list[Path]) -> None:
+        debug_log(f"ricevuti: {[str(p) for p in paths]}")
+        if self.window is None:
+            self.pending.extend(paths)
+            return
+        self.window.add_paths(paths)
+        self.window.setWindowState(self.window.windowState() & ~Qt.WindowMinimized)
+        self.window.raise_()
+        self.window.activateWindow()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -647,9 +838,20 @@ def main(argv: list[str] | None = None) -> int:
     app.setWindowIcon(QIcon(str(Path(__file__).with_name("resources") / "icon.png")))
     settings = load_settings()
     set_language(settings.get("language") or default_language())
-    window = MainWindow(settings, [a for a in argv[1:] if not a.startswith("-")])
+    paths = [a for a in argv[1:] if not a.startswith("-")]
+
+    # Un secondo avvio (per esempio dal tasto destro su più file) passa i file alla finestra aperta
+    instance = SingleInstance()
+    if not instance.acquire():
+        if instance.send(paths):
+            return 0
+    instance.received.connect(lambda received: app.open_paths([Path(p) for p in received]))
+
+    debug_log(f"avvio: {paths}")
+    window = MainWindow(settings, paths)
     app.window = window
     window.add_paths(app.pending)
     window.show()
+    integration.refresh(tr("context_label"))
     QTimer.singleShot(1500, window.updates.start)
     return app.exec()

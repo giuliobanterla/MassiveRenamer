@@ -8,10 +8,15 @@ Interfaccia in italiano e in inglese, scelta dal menu **Lingua**.
 ## Funzioni
 
 - **Sostituisci tutto il nome** con un testo nuovo.
-- **Cerca e sostituisci**, con o senza distinzione tra maiuscole e minuscole, anche con espressioni regolari.
+- **Cerca e sostituisci**, con o senza distinzione tra maiuscole e minuscole, anche con espressioni regolari,
+  con quante coppie cerca/sostituisci servono, applicate in ordine.
+- **Togli caratteri in una posizione**: quanti e da quale posizione, contando dall'inizio o dalla fine.
 - **Taglia** un numero di caratteri da sinistra e/o da destra.
+- **Inserisci testo in una posizione**, contando i caratteri dall'inizio o dalla fine.
 - **Maiuscole e minuscole**: tutto maiuscolo, tutto minuscolo, Iniziali Maiuscole, solo la prima maiuscola.
 - **Aggiungi testo** prima e dopo il nome.
+- **Data** prima, dopo o al posto del nome: data di modifica, di creazione o di scatto delle foto (EXIF di JPEG, TIFF e
+  dei RAW basati su TIFF; se manca si usa la data di modifica), con formato a scelta (`%Y-%m-%d`, `%Y%m%d_%H%M`…).
 - **Numerazione** con valore iniziale, incremento, numero di cifre, posizione (prima, dopo o al posto del nome) e separatore.
 - **Estensione**: sostituita, maiuscola, minuscola o rimossa.
 - **Anteprima immediata**, con i problemi segnalati prima di rinominare: nomi duplicati, file già esistenti, caratteri non ammessi dal sistema, nomi riservati di Windows, nomi vuoti.
@@ -19,6 +24,11 @@ Interfaccia in italiano e in inglese, scelta dal menu **Lingua**.
 - **Esporta script** (`.bat` su Windows, `.sh` su macOS) per rifare la rinomina, insieme allo script che la annulla.
 - **Salva e carica le regole** in un file `.json`. Le ultime regole usate vengono ricordate.
 - Aggiunta di file e cartelle, anche trascinandoli nella finestra, con filtro (`*.jpg;*.png`), sottocartelle e file nascosti a scelta.
+  Cambiando filtro o opzioni la lista si ricalcola subito; i file tolti a mano restano fuori finché non si riaggiunge la cartella.
+- **Svuota lista** con il pulsante accanto a «Rinomina» o con ⌘⇧⌫ (macOS) / Ctrl+Shift+Backspace (Windows).
+- **Menu del tasto destro** (menu File → «Aggiungi al menu del tasto destro»): «Rinomina con MassiveRenamer» su file e cartelle.
+  Su Windows in Esplora risorse (su Windows 11 sotto «Mostra altre opzioni»), su macOS nelle Azioni rapide del Finder.
+  Più file selezionati, o più avvii, finiscono nella stessa finestra.
 - Ordinamento per nome (i numeri sono ordinati come numeri: `img2` prima di `img10`), estensione, data di modifica o dimensione. La numerazione segue quest'ordine.
 
 Gli spostamenti avvengono in due passaggi attraverso nomi temporanei. Così funzionano anche gli scambi di nome tra due file
@@ -37,7 +47,8 @@ python3 -m venv .venv
 
 Su Windows il percorso è `.venv\Scripts\python`.
 
-I percorsi di file o cartelle passati come argomenti vengono aggiunti subito alla lista.
+I percorsi di file o cartelle passati come argomenti vengono aggiunti subito alla lista; se il programma è già aperto,
+finiscono nella finestra esistente. Con `MASSIVERENAMER_DEBUG_LOG=/percorso/file.log` il programma annota i file ricevuti.
 
 ## Test
 
@@ -110,6 +121,8 @@ dell'app), dove c'è anche **Cerca aggiornamenti…** per controllare subito.
 - `massiverenamer/engine.py`: regole, anteprima, rinomina, annullamento e script. Non dipende dall'interfaccia.
 - `massiverenamer/gui.py`: interfaccia Qt (PySide6).
 - `massiverenamer/updater.py` e `update_ui.py`: aggiornamento automatico.
+- `massiverenamer/integration.py`: menu del tasto destro; `single_instance.py`: una sola finestra.
+- `massiverenamer/exif.py`: data di scatto delle foto, senza dipendenze.
 - `massiverenamer/i18n.py`: testi in italiano e inglese.
 - `tests/`: test del motore.
 
