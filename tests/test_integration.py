@@ -1,5 +1,6 @@
 import plistlib
 import sys
+import threading
 import time
 import uuid
 
@@ -62,10 +63,16 @@ def test_single_instance_forwards_paths(tmp_path):
     first.received.connect(received.extend)
     assert first.acquire()
     assert not second.acquire()
-    assert second.send([str(tmp_path / "a.txt"), str(tmp_path / "b c.txt")])
-    deadline = time.monotonic() + 5
-    while not received and time.monotonic() < deadline:
+    # Il secondo avvio aspetta la conferma: nel test gira in un altro thread, mentre questo
+    # fa girare gli eventi dell'istanza principale come farebbe la finestra aperta.
+    result = []
+    sender = threading.Thread(target=lambda: result.append(second.send([str(tmp_path / "a.txt"), str(tmp_path / "b c.txt")])))
+    sender.start()
+    deadline = time.monotonic() + 10
+    while (sender.is_alive() or not received) and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.01)
+    sender.join(1)
+    assert result == [True]
     assert received == [str(tmp_path / "a.txt"), str(tmp_path / "b c.txt")]
     first.lock.unlock()

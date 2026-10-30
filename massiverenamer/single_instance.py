@@ -17,6 +17,9 @@ from PySide6.QtCore import QDir, QLockFile, QObject, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 
+ACK = b"ok\n"
+
+
 def _name() -> str:
     try:
         user = getpass.getuser()
@@ -46,8 +49,9 @@ class SingleInstance(QObject):
         return True
 
     def send(self, paths: list[str], timeout: float = 5.0) -> bool:
-        """Manda i percorsi all'istanza principale, aspettando che sia pronta (può essere appena partita)."""
-        data = json.dumps([str(Path(p).absolute()) for p in paths]).encode("utf-8")
+        """Manda i percorsi all'istanza principale, aspettando che sia pronta (può essere appena partita)
+        e che confermi di averli ricevuti: chiudere subito la connessione può farli perdere su Windows."""
+        data = json.dumps([str(Path(p).absolute()) for p in paths]).encode("utf-8") + b"\n"
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             socket = QLocalSocket()
@@ -55,9 +59,16 @@ class SingleInstance(QObject):
             if socket.waitForConnected(200):
                 socket.write(data)
                 socket.flush()
-                socket.waitForBytesWritten(2000)
+                while socket.bytesToWrite() and time.monotonic() < deadline:
+                    socket.waitForBytesWritten(100)
+                reply = b""
+                while ACK not in reply and time.monotonic() < deadline:
+                    if socket.waitForReadyRead(100):
+                        reply += bytes(socket.readAll())
+                    elif socket.state() != QLocalSocket.ConnectedState:
+                        break
                 socket.disconnectFromServer()
-                return True
+                return ACK in reply
             time.sleep(0.1)
         return False
 
@@ -68,16 +79,20 @@ class SingleInstance(QObject):
 
             def read(socket=socket, buffer=buffer):
                 buffer.extend(bytes(socket.readAll()))
-
-            def done(socket=socket, buffer=buffer):
-                read()
+                if b"\n" not in buffer:
+                    return
+                message = bytes(buffer).split(b"\n", 1)[0]
+                buffer.clear()
                 try:
-                    paths = json.loads(buffer.decode("utf-8"))
+                    paths = json.loads(message.decode("utf-8"))
                 except ValueError:
                     paths = []
                 if isinstance(paths, list):
                     self.received.emit([str(p) for p in paths])
-                socket.deleteLater()
+                socket.write(ACK)
+                socket.flush()
 
             socket.readyRead.connect(read)
-            socket.disconnected.connect(done)
+            socket.disconnected.connect(socket.deleteLater)
+            # I dati possono essere arrivati prima che i segnali fossero collegati
+            read()
