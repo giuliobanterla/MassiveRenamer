@@ -65,6 +65,14 @@ def stamp_version() -> None:
         plist = plistlib.load(f)
     plist["CFBundleShortVersionString"] = plist["CFBundleVersion"] = __version__
     plist["NSHumanReadableCopyright"] = "GPL-3.0"
+    # File e cartelle aperti con «Apri con», trascinati sull'icona o mandati dall'Azione rapida;
+    # LSHandlerRank None: l'app non diventa mai quella predefinita per nessun tipo di file
+    plist["CFBundleDocumentTypes"] = [{
+        "CFBundleTypeName": "File e cartelle",
+        "CFBundleTypeRole": "Viewer",
+        "LSHandlerRank": "None",
+        "LSItemContentTypes": ["public.item", "public.folder"],
+    }]
     with plist_path.open("wb") as f:
         plistlib.dump(plist, f)
 

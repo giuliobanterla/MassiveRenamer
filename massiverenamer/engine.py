@@ -13,13 +13,17 @@ import sys
 import time
 import unicodedata
 import uuid
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
+
+from .exif import date_taken
 
 CASE_MODES = ("keep", "upper", "lower", "title", "sentence")
 EXT_MODES = ("keep", "replace", "upper", "lower", "remove")
 NUM_POSITIONS = ("before", "after", "replace")
+DATE_MODES = ("none", "modified", "created", "taken")
 SORT_KEYS = ("name", "ext", "mtime", "size")
 
 WINDOWS_INVALID_CHARS = set('<>:"/\\|?*')
@@ -36,8 +40,9 @@ class RuleError(ValueError):
 @dataclass
 class Rules:
     """Insieme delle regole, applicate in quest'ordine:
-    nome sostituito per intero, cerca/sostituisci, taglio, maiuscole/minuscole,
-    testo prima/dopo, numerazione, estensione."""
+    nome sostituito per intero, cerca/sostituisci (anche più coppie), caratteri tolti in una
+    posizione, taglio, testo inserito in una posizione, maiuscole/minuscole, testo prima/dopo,
+    data, numerazione, estensione."""
 
     replace_all: bool = False
     replace_all_text: str = ""
@@ -45,11 +50,25 @@ class Rules:
     replace_with: str = ""
     match_case: bool = False
     use_regex: bool = False
+    # Altre coppie [cerca, sostituisci], applicate dopo la prima con le stesse opzioni
+    replacements: list = field(default_factory=list)
+    # Toglie remove_count caratteri a partire dalla posizione remove_pos (1 = primo carattere)
+    remove_pos: int = 1
+    remove_count: int = 0
+    remove_from_end: bool = False
     trim_left: int = 0
     trim_right: int = 0
+    # Inserisce insert_text dopo insert_pos caratteri (0 = all'inizio), contati dall'inizio o dalla fine
+    insert_text: str = ""
+    insert_pos: int = 0
+    insert_from_end: bool = False
     case: str = "keep"
     prefix: str = ""
     suffix: str = ""
+    date_mode: str = "none"
+    date_format: str = "%Y-%m-%d"
+    date_position: str = "before"
+    date_separator: str = "_"
     numbering: bool = False
     num_start: int = 1
     num_step: int = 1
@@ -69,7 +88,16 @@ class Rules:
         for f in fields(cls):
             if f.name in data and isinstance(data[f.name], type(getattr(rules, f.name))):
                 setattr(rules, f.name, data[f.name])
+        rules.replacements = [
+            [str(pair[0]), str(pair[1])] for pair in rules.replacements
+            if isinstance(pair, (list, tuple)) and len(pair) == 2
+        ]
         return rules
+
+    def find_pairs(self) -> list[tuple[str, str]]:
+        """Tutte le coppie cerca/sostituisci non vuote, nell'ordine in cui si applicano."""
+        pairs = [(self.find, self.replace_with)] + [(f, r) for f, r in self.replacements]
+        return [(f, r) for f, r in pairs if f]
 
 
 def split_name(name: str) -> tuple[str, str]:
@@ -102,34 +130,77 @@ class Renamer:
 
     def __init__(self, rules: Rules):
         self.rules = rules
-        self._pattern = None
-        if rules.find:
-            flags = 0 if rules.match_case else re.IGNORECASE
-            source = rules.find if rules.use_regex else re.escape(rules.find)
+        self._patterns: list[tuple[re.Pattern, str]] = []
+        flags = 0 if rules.match_case else re.IGNORECASE
+        for find, replace in rules.find_pairs():
+            source = find if rules.use_regex else re.escape(find)
             try:
-                self._pattern = re.compile(source, flags)
+                self._patterns.append((re.compile(source, flags), replace))
             except re.error as exc:
                 raise RuleError(str(exc)) from exc
+        if rules.date_mode != "none":
+            try:
+                datetime(2000, 1, 2, 3, 4, 5).strftime(rules.date_format)
+            except ValueError as exc:
+                raise RuleError(str(exc)) from exc
 
-    def new_name(self, name: str, index: int) -> str:
-        """Nuovo nome per il file in posizione `index` (da 0) nella lista."""
+    def _date(self, path: Path | None) -> str:
+        """Data del file secondo date_mode; la data di scatto, se manca, diventa quella di modifica."""
+        if path is None:
+            return ""
+        found = date_taken(path) if self.rules.date_mode == "taken" else None
+        if found is None:
+            try:
+                st = path.stat()
+            except OSError:
+                return ""
+            stamp = st.st_mtime
+            if self.rules.date_mode == "created":
+                stamp = getattr(st, "st_birthtime", None) or (st.st_ctime if sys.platform == "win32" else st.st_mtime)
+            found = datetime.fromtimestamp(stamp)
+        return found.strftime(self.rules.date_format)
+
+    def new_name(self, name: str, index: int, path: Path | None = None) -> str:
+        """Nuovo nome per il file in posizione `index` (da 0) nella lista; `path` serve per le date."""
         r = self.rules
         stem, ext = split_name(name)
 
         if r.replace_all:
             stem = r.replace_all_text
-        if self._pattern is not None:
-            replacement = r.replace_with if r.use_regex else (lambda _m: r.replace_with)
+        for pattern, replace_with in self._patterns:
+            replacement = replace_with if r.use_regex else (lambda _m, text=replace_with: text)
             try:
-                stem = self._pattern.sub(replacement, stem)
+                stem = pattern.sub(replacement, stem)
             except (re.error, IndexError) as exc:
                 raise RuleError(str(exc)) from exc
+        if r.remove_count > 0:
+            start = max(r.remove_pos, 1) - 1
+            if r.remove_from_end:
+                end = max(len(stem) - start, 0)
+                stem = stem[: max(end - r.remove_count, 0)] + stem[end:]
+            else:
+                stem = stem[:start] + stem[start + r.remove_count :]
         if r.trim_left > 0:
             stem = stem[r.trim_left :]
         if r.trim_right > 0:
             stem = stem[: -r.trim_right] if r.trim_right < len(stem) else ""
+        if r.insert_text:
+            pos = min(max(r.insert_pos, 0), len(stem))
+            if r.insert_from_end:
+                pos = len(stem) - pos
+            stem = stem[:pos] + r.insert_text + stem[pos:]
         stem = _apply_case(stem, r.case)
         stem = f"{r.prefix}{stem}{r.suffix}"
+
+        if r.date_mode != "none":
+            date = self._date(path)
+            if date:
+                if r.date_position == "replace":
+                    stem = date
+                elif r.date_position == "after":
+                    stem = f"{stem}{r.date_separator}{date}"
+                else:
+                    stem = f"{date}{r.date_separator}{stem}"
 
         if r.numbering:
             number = str(r.num_start + index * r.num_step).zfill(max(1, r.num_padding))
@@ -206,7 +277,7 @@ def build_plan(paths: list[Path], rules: Rules, platform: str = sys.platform) ->
     (tranne per controllare se il nome di destinazione esiste già)."""
     try:
         renamer = Renamer(rules)
-        names = [renamer.new_name(p.name, i) for i, p in enumerate(paths)]
+        names = [renamer.new_name(p.name, i, p) for i, p in enumerate(paths)]
     except RuleError as exc:
         return [PlanItem(p, p.name, Status.ERROR, str(exc)) for p in paths]
 
