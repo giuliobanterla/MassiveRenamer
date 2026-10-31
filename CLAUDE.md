@@ -15,7 +15,8 @@ massiverenamer/integration.py  menu del tasto destro (registro HKCU su Windows, 
 massiverenamer/single_instance.py  un secondo avvio passa i file alla finestra aperta (QLockFile + QLocalServer)
 massiverenamer/exif.py     data di scatto da JPEG/TIFF senza dipendenze
 tests/                     pytest: motore, aggiornamento, integrazione e interfaccia (test_gui.py, senza schermo)
-build.py                   eseguibile con PyInstaller (.app su macOS, .exe su Windows); firma e notarizza su macOS
+build.py                   PyInstaller: .app e .dmg firmati e notarizzati su macOS; su Windows cartella +
+                           installer Inno Setup (packaging/windows/MassiveRenamer.iss) + .exe portatile
 packaging/MassiveRenamer.spec  opzioni PyInstaller e parti di Qt escluse; `--self-test` (eseguito dalla CI) verifica
                            che l'eseguibile parta: se si usa un nuovo modulo Qt, toglierlo da UNUSED_QT
 tools/make_icons.py        disegna l'icona (assets/icon/, massiverenamer/resources/)
@@ -54,6 +55,9 @@ minuscole, script `.bat`/`.sh`).
 - Mai push diretto su `main`. Mai creare o pubblicare tag o release senza un sì esplicito.
   `.claude/settings.json` chiede conferma per questi comandi. Un tag `v*` lancia `release.yml`, che
   pubblica la release: i programmi installati la propongono subito come aggiornamento.
+- Nomi dei file della release: li cerca l'aggiornamento automatico (`updater.asset_name`); se cambiano in
+  `release.yml`, vanno cambiati anche lì. Su Windows la copia installata (con `unins000.exe` accanto) si aggiorna
+  con l'installer, la portatile sostituendo l'.exe.
 - Firma macOS: Developer ID team `D3694MQ8D9` (lo stesso di GBFileCopier); segreti del repository solo nel
   workflow di release. In locale: `MACOS_SIGN_IDENTITY="Developer ID Application: Giulio Banterla (D3694MQ8D9)" .venv/bin/python build.py`
   (firma senza notarizzare). Windows non è firmato.

@@ -68,11 +68,16 @@ def is_newer(candidate: str, current: str) -> bool:
     return a + (0,) * (width - len(a)) > b + (0,) * (width - len(b))
 
 
-def asset_name(plat: str = sys.platform, machine: str | None = None) -> str | None:
-    """Nome dell'eseguibile per questo sistema, come pubblicato da release.yml."""
+WIN_SETUP = "MassiveRenamer-setup-windows-x64.exe"
+WIN_PORTABLE = "MassiveRenamer-windows-x64.exe"
+
+
+def asset_name(plat: str = sys.platform, machine: str | None = None, installed: bool = False) -> str | None:
+    """Nome del file per questo sistema, come pubblicato da release.yml. Su Windows `installed`
+    indica la copia installata, che si aggiorna con l'installer invece che sostituendo l'.exe."""
     machine = (machine or platform.machine()).lower()
     if plat == "win32":
-        return "MassiveRenamer-windows-x64.exe"
+        return WIN_SETUP if installed else WIN_PORTABLE
     if plat == "darwin":
         return f"MassiveRenamer-macos-{'arm64' if machine in ('arm64', 'aarch64') else 'x64'}.zip"
     return None
@@ -199,6 +204,11 @@ def install_target(plat: str = sys.platform, executable: str = sys.executable,
     return target if os.access(target.parent, os.W_OK) else None
 
 
+def windows_installed(exe: Path) -> bool:
+    """Vero per la copia messa dall'installer: accanto all'.exe c'è il suo disinstallatore."""
+    return any(exe.parent.glob("unins*.exe"))
+
+
 def old_path(exe: Path) -> Path:
     return exe.with_name(exe.name + ".old")
 
@@ -206,7 +216,7 @@ def old_path(exe: Path) -> Path:
 def cleanup_previous(plat: str = sys.platform) -> None:
     """All'avvio, toglie l'eseguibile della versione precedente lasciato da un aggiornamento su Windows."""
     target = install_target(plat)
-    if plat == "win32" and target is not None:
+    if plat == "win32" and target is not None and not windows_installed(target):
         try:
             old_path(target).unlink(missing_ok=True)
         except OSError:
@@ -226,10 +236,34 @@ def swap_windows(exe: Path, new_exe: Path) -> None:
         raise
 
 
+def windows_setup_script(pid: int, setup: Path) -> str:
+    """Comando PowerShell che aspetta la chiusura del programma, esegue l'installer senza finestre
+    (che alla fine riapre il programma, /LAUNCH) e poi lo cancella."""
+    q = str(setup).replace("'", "''")
+    return (f"Wait-Process -Id {pid} -ErrorAction SilentlyContinue; "
+            f"Start-Process -FilePath '{q}' -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/LAUNCH' -Wait; "
+            f"Remove-Item -LiteralPath '{q}' -ErrorAction SilentlyContinue")
+
+
+def install_windows_setup(release: Release, progress=None) -> None:
+    """Copia installata: scarica l'installer; parte quando il programma si chiude."""
+    setup = Path(tempfile.gettempdir()) / f"MassiveRenamer-setup-{release.version}.exe"
+    try:
+        download_verified(release, WIN_SETUP, setup, progress)
+    except OSError as exc:
+        raise UpdateError(str(exc)) from exc
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                      "-Command", windows_setup_script(os.getpid(), setup)], creationflags=flags, close_fds=True)
+
+
 def install_windows(release: Release, exe: Path, progress=None) -> None:
+    if windows_installed(exe):
+        install_windows_setup(release, progress)
+        return
     new_exe = exe.with_name(f".{exe.stem}-{release.version}.exe")
     try:
-        download_verified(release, asset_name("win32"), new_exe, progress)
+        download_verified(release, WIN_PORTABLE, new_exe, progress)
         swap_windows(exe, new_exe)
     except OSError as exc:
         raise UpdateError(str(exc)) from exc
@@ -316,8 +350,8 @@ def install_macos(release: Release, app: Path, progress=None) -> None:
 
 
 def install(release: Release, progress=None) -> None:
-    """Installa la release. Dopo il ritorno l'app deve chiudersi: su Windows la nuova versione
-    è già partita, su macOS parte quando questa si chiude."""
+    """Installa la release. Dopo il ritorno l'app deve chiudersi: su Windows la versione portatile
+    è già partita, l'installer e su macOS la nuova app partono quando questa si chiude."""
     target = install_target()
     if target is None:
         raise UpdateError("questa installazione non si può aggiornare da sola")
