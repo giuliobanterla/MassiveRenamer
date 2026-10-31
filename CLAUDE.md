@@ -14,7 +14,8 @@ massiverenamer/i18n.py     testi italiano/inglese
 massiverenamer/integration.py  menu del tasto destro (registro HKCU su Windows, Azione rapida su macOS)
 massiverenamer/single_instance.py  un secondo avvio passa i file alla finestra aperta (QLockFile + QLocalServer)
 massiverenamer/exif.py     data di scatto da JPEG/TIFF senza dipendenze
-tests/                     pytest: motore, aggiornamento, integrazione e interfaccia (test_gui.py, senza schermo)
+tests/                     pytest: motore, aggiornamento, integrazione, notarizzazione (test_build.py) e
+                           interfaccia (test_gui.py, senza schermo)
 build.py                   PyInstaller: .app e .dmg firmati e notarizzati su macOS; su Windows cartella +
                            installer Inno Setup (packaging/windows/MassiveRenamer.iss) + .exe portatile
 packaging/MassiveRenamer.spec  opzioni PyInstaller e parti di Qt escluse; `--self-test` (eseguito dalla CI) verifica
