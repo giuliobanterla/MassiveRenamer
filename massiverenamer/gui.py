@@ -830,6 +830,22 @@ class Application(QApplication):
         self.window.activateWindow()
 
 
+def self_test(app: QApplication, settings: dict) -> int:
+    """Controllo usato dalla CI sull'eseguibile impacchettato: se mancasse una libreria tolta per
+    alleggerirlo, qui il programma si fermerebbe con un errore invece di aprire la finestra."""
+    from . import updater
+
+    updater._ssl_context()  # certificati e OpenSSL per l'aggiornamento automatico
+    SingleInstance(f"MassiveRenamer-selftest-{os.getpid()}")
+    window = MainWindow(settings, [])
+    window.show()
+    QTimer.singleShot(1500, app.quit)
+    app.exec()
+    window.close()
+    print(f"self-test ok: {__version__}, {app.style().name()}, {app.platformName()}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     app = Application(argv)
@@ -839,6 +855,9 @@ def main(argv: list[str] | None = None) -> int:
     settings = load_settings()
     set_language(settings.get("language") or default_language())
     paths = [a for a in argv[1:] if not a.startswith("-")]
+
+    if "--self-test" in argv:
+        return self_test(app, settings)
 
     # Un secondo avvio (per esempio dal tasto destro su più file) passa i file alla finestra aperta
     instance = SingleInstance()
