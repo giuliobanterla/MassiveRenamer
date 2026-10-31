@@ -1,15 +1,20 @@
-"""Crea l'eseguibile per il sistema su cui gira: MassiveRenamer.exe su Windows, MassiveRenamer.app su macOS.
+"""Crea il programma per il sistema su cui gira, nella cartella dist/:
+- Windows: MassiveRenamer-setup.exe (installer, se c'è Inno Setup 6), MassiveRenamer-portable.exe
+  e la cartella MassiveRenamer/ da cui è fatto l'installer;
+- macOS: MassiveRenamer.app e MassiveRenamer.dmg (l'app da trascinare in Applicazioni).
 
-Uso: python build.py   (risultato nella cartella dist/)
+Uso: python build.py
 
 Su macOS la firma è ad-hoc (l'app parte, ma Gatekeeper avvisa al primo avvio). Con queste variabili
 d'ambiente l'app è firmata con un Developer ID e, se ci sono anche le credenziali, notarizzata:
   MACOS_SIGN_IDENTITY   "Developer ID Application: Nome (TEAMID)", già nel portachiavi
   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   notarizzazione (password specifica per app)
+Su Windows ISCC.exe si cerca nel PATH, in INNO_SETUP o nella cartella d'installazione standard.
 """
 
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,7 +25,10 @@ import PyInstaller.__main__
 from massiverenamer import __version__
 
 ROOT = Path(__file__).resolve().parent
-APP = ROOT / "dist" / "MassiveRenamer.app"
+DIST = ROOT / "dist"
+APP = DIST / "MassiveRenamer.app"
+DMG = DIST / "MassiveRenamer.dmg"
+ISS = ROOT / "packaging" / "windows" / "MassiveRenamer.iss"
 ENTITLEMENTS = ROOT / "packaging" / "macos" / "entitlements.plist"
 
 
@@ -53,7 +61,7 @@ def pyinstaller() -> None:
     if sys.platform == "win32":
         os.environ["MASSIVERENAMER_VERSION_FILE"] = str(windows_version_file())
     PyInstaller.__main__.run([str(ROOT / "packaging" / "MassiveRenamer.spec"), "--noconfirm", "--clean",
-                              "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build")])
+                              "--distpath", str(DIST), "--workpath", str(ROOT / "build")])
 
 
 def stamp_version() -> None:
@@ -113,20 +121,61 @@ def sign_macos() -> None:
     print(f"==> Firmata con: {identity if identity != '-' else 'firma ad-hoc'}")
 
 
+def find_iscc() -> str | None:
+    candidates = [os.environ.get("INNO_SETUP"), shutil.which("iscc")]
+    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"),
+                 os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
+        if base:
+            candidates.append(os.path.join(base, "Inno Setup 6", "ISCC.exe"))
+    return next((c for c in candidates if c and os.path.isfile(c)), None)
+
+
+def installer_windows() -> None:
+    iscc = find_iscc()
+    if not iscc:
+        print("==> Installer non creato: manca Inno Setup 6 (https://jrsoftware.org/isdl.php)")
+        return
+    run(iscc, "/Qp", f"/DAppVersion={__version__}", f"/DSourceDir={DIST / 'MassiveRenamer'}",
+        f"/DOutputDir={DIST}", str(ISS))
+    print(f"==> Installer: {DIST / 'MassiveRenamer-setup.exe'}")
+
+
+def dmg_macos() -> None:
+    """Immagine disco con l'app e il collegamento ad Applicazioni, firmata come l'app."""
+    DMG.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        stage = Path(tmp) / "MassiveRenamer"
+        stage.mkdir()
+        run("ditto", str(APP), str(stage / APP.name))
+        (stage / "Applications").symlink_to("/Applications")
+        cmd = ["hdiutil", "create", "-volname", "MassiveRenamer", "-srcfolder", str(stage),
+               "-fs", "HFS+", "-format", "UDZO", "-ov", str(DMG)]
+        for attempt in range(3):  # sui runner hdiutil a volte risponde «Resource busy»
+            if subprocess.run(cmd).returncode == 0:
+                break
+        else:
+            raise SystemExit("hdiutil non riesce a creare il .dmg")
+    identity = os.environ.get("MACOS_SIGN_IDENTITY")
+    if identity:
+        run("codesign", "--force", "--sign", identity, "--timestamp", str(DMG))
+    print(f"==> Immagine disco: {DMG}")
+
+
 def notarize_macos() -> None:
+    """Notarizza il .dmg: la notarizzazione copre anche l'app che contiene, e il ticket viene
+    applicato a entrambi (lo zip per l'aggiornamento automatico si fa dopo, dall'app)."""
     creds = [os.environ.get(k) for k in ("APPLE_ID", "APPLE_TEAM_ID", "APPLE_APP_PASSWORD")]
     if not os.environ.get("MACOS_SIGN_IDENTITY") or not all(creds):
         print("==> Non notarizzata (manca il Developer ID o le credenziali)")
         return
     apple_id, team_id, password = creds
-    with tempfile.TemporaryDirectory() as tmp:
-        archive = Path(tmp) / "MassiveRenamer.zip"
-        run("ditto", "-c", "-k", "--keepParent", str(APP), str(archive))
-        print("==> Notarizzazione")
-        run("xcrun", "notarytool", "submit", str(archive), "--apple-id", apple_id, "--team-id", team_id,
-            "--password", password, "--wait")
+    print("==> Notarizzazione")
+    run("xcrun", "notarytool", "submit", str(DMG), "--apple-id", apple_id, "--team-id", team_id,
+        "--password", password, "--wait")
     run("xcrun", "stapler", "staple", str(APP))
+    run("xcrun", "stapler", "staple", str(DMG))
     run("spctl", "--assess", "--type", "execute", "--verbose=2", str(APP))
+    run("spctl", "--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", str(DMG))
 
 
 if __name__ == "__main__":
@@ -134,4 +183,7 @@ if __name__ == "__main__":
     if sys.platform == "darwin":
         stamp_version()
         sign_macos()
+        dmg_macos()
         notarize_macos()
+    elif sys.platform == "win32":
+        installer_windows()

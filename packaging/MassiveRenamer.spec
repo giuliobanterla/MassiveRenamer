@@ -1,4 +1,6 @@
-# Specifica PyInstaller usata da build.py: .app su macOS, .exe in un solo file su Windows.
+# Specifica PyInstaller usata da build.py: .app su macOS; su Windows la cartella dist/MassiveRenamer/
+# (per l'installer, si avvia più in fretta) e la versione portatile in un solo file,
+# dist/MassiveRenamer-portable.exe.
 #
 # Rispetto a quello che PyInstaller raccoglierebbe da solo, toglie le parti di Qt che il programma
 # non usa (QML/Quick, PDF, SVG, OpenGL, tastiera virtuale, plugin di immagini e input, backend TLS
@@ -56,8 +58,8 @@ if sys.platform == "darwin":
         bundle_identifier="info.gbss.massiverenamer",
     )
 else:
-    exe = EXE(  # noqa: F821
-        pyz, a.scripts, a.binaries, a.datas, [], name="MassiveRenamer", console=False,
-        icon=os.path.join(ROOT, "assets", "icon", "icon.ico"),
-        version=os.environ.get("MASSIVERENAMER_VERSION_FILE"),
-    )
+    windows = dict(console=False, icon=os.path.join(ROOT, "assets", "icon", "icon.ico"),
+                   version=os.environ.get("MASSIVERENAMER_VERSION_FILE"))
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="MassiveRenamer", **windows)  # noqa: F821
+    coll = COLLECT(exe, a.binaries, a.datas, name="MassiveRenamer")  # noqa: F821
+    portable = EXE(pyz, a.scripts, a.binaries, a.datas, [], name="MassiveRenamer-portable", **windows)  # noqa: F821

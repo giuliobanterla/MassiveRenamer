@@ -38,6 +38,19 @@ Gli spostamenti avvengono in due passaggi attraverso nomi temporanei. Così funz
 e i cambi solo di maiuscole/minuscole (`foto.jpg` → `FOTO.JPG`), che su Windows e macOS sono un caso difficile.
 Un file esistente non viene mai sovrascritto.
 
+## Download e installazione
+
+Dalla pagina [Releases](https://github.com/giuliobanterla/MassiveRenamer/releases/latest):
+
+| Sistema | File | Come si installa |
+|---|---|---|
+| Windows | `MassiveRenamer-setup-windows-x64.exe` | installer: per il solo utente, senza permessi da amministratore, con la voce nel menu Start, la voce facoltativa nel menu del tasto destro e la disinstallazione da *Impostazioni* → *App* |
+| Windows | `MassiveRenamer-windows-x64.exe` | versione portatile: un file unico da avviare dove si vuole, senza installazione |
+| macOS Apple Silicon | `MassiveRenamer-macos-arm64.dmg` | si apre il `.dmg` e si trascina MassiveRenamer in *Applicazioni* |
+| macOS Intel | `MassiveRenamer-macos-x64.dmg` | come sopra |
+
+Gli `.zip` per macOS contengono la stessa app e servono all'aggiornamento automatico.
+
 ## Avvio da sorgente
 
 Serve Python 3.10 o più recente.
@@ -64,19 +77,25 @@ I test comprendono anche l'interfaccia, eseguita senza schermo: le immagini dell
 
 ## Eseguibili
 
-`python build.py` crea l'eseguibile per il sistema su cui gira, nella cartella `dist/`, con le opzioni di
+`python build.py` crea il programma per il sistema su cui gira, nella cartella `dist/`, con le opzioni di
 `packaging/MassiveRenamer.spec` (che toglie le parti di Qt non usate: l'app per macOS pesa circa 70 MB invece di 104):
 
-- su macOS `MassiveRenamer.app`
-- su Windows `MassiveRenamer.exe`, un file unico che non va installato
+- su macOS `MassiveRenamer.app` e `MassiveRenamer.dmg`, l'immagine disco con l'app e il collegamento ad *Applicazioni*;
+- su Windows la cartella `MassiveRenamer/`, l'installer `MassiveRenamer-setup.exe` creato da quella cartella con
+  [Inno Setup 6](https://jrsoftware.org/isinfo.php) (`packaging/windows/MassiveRenamer.iss`; senza Inno Setup
+  l'installer viene saltato) e la versione portatile `MassiveRenamer-portable.exe`, in un file unico.
+  Il programma installato si avvia più in fretta di quello portatile, che a ogni avvio si scompatta in una cartella temporanea.
+
+In CI ogni pull request prova anche l'installer (installazione silenziosa, avvio, voce del tasto destro,
+disinstallazione) e il `.dmg` (montaggio e avvio dell'app che contiene).
 
 Non si può creare l'eseguibile Windows da un Mac. Per questo il workflow GitHub Actions `.github/workflows/build.yml`
 esegue i test e crea gli eseguibili per Windows x64, macOS Apple Silicon (arm64) e macOS Intel (x64) a ogni pull request
 e a ogni merge su `main`. Si scaricano dalla pagina del workflow, alla voce *Artifacts*.
 
-**Firma.** Nelle release l'app per macOS è firmata con un Developer ID e notarizzata da Apple, quindi si apre
-senza avvisi. Le build delle pull request hanno solo la firma ad-hoc: al primo avvio clic destro sull'app → *Apri*.
-L'eseguibile per Windows non è firmato: in SmartScreen, *Ulteriori informazioni* → *Esegui comunque*.
+**Firma.** Nelle release l'app e il `.dmg` per macOS sono firmati con un Developer ID e notarizzati da Apple,
+quindi si aprono senza avvisi. Le build delle pull request hanno solo la firma ad-hoc: al primo avvio clic destro sull'app → *Apri*.
+Installer ed eseguibile per Windows non sono firmati: in SmartScreen, *Ulteriori informazioni* → *Esegui comunque*.
 
 La firma su macOS la fa `build.py` se trova queste variabili d'ambiente (in CI arrivano dai segreti del repository,
 solo nel workflow di release):
@@ -101,8 +120,10 @@ dell'app), dove c'è anche **Cerca aggiornamenti…** per controllare subito.
   indicato in `SHA256SUMS.txt` della release.
 - Su macOS, se l'app in uso è firmata con un Developer ID, la nuova deve essere firmata dallo stesso team e
   notarizzata, altrimenti l'aggiornamento viene rifiutato.
-- **Installa e riavvia**: su Windows il nuovo `.exe` prende il posto di quello attuale e parte subito; su macOS,
-  dopo la chiusura, la nuova `.app` sostituisce la vecchia (che torna al suo posto se qualcosa va storto) e si apre.
+- **Installa e riavvia**:
+  - Windows, programma installato: dopo la chiusura parte il nuovo installer senza finestre, che poi riapre il programma;
+  - Windows, versione portatile: il nuovo `.exe` prende il posto di quello attuale e parte subito;
+  - macOS: dopo la chiusura la nuova `.app` sostituisce la vecchia (che torna al suo posto se qualcosa va storto) e si apre.
 - Se il programma gira da sorgente o la sua cartella non è scrivibile, c'è **Scarica…**, che apre la pagina della release.
 - Per provare un aggiornamento: `MASSIVERENAMER_PRETEND_VERSION=0.0.1` fa credere al programma di essere più vecchio.
 
@@ -111,8 +132,9 @@ dell'app), dove c'è anche **Cerca aggiornamenti…** per controllare subito.
 1. Pull request che aggiorna `__version__` in `massiverenamer/__init__.py`, merge in `main`.
 2. Tag annotato sul commit di `main`: `git tag -a v0.2.0 -m "MassiveRenamer 0.2.0"` e `git push origin v0.2.0`.
 3. Il workflow `.github/workflows/release.yml` controlla che il tag corrisponda alla versione, esegue test e build
-   sulle tre piattaforme e pubblica la release con `MassiveRenamer-windows-x64.exe`, `MassiveRenamer-macos-arm64.zip`,
-   `MassiveRenamer-macos-x64.zip` e `SHA256SUMS.txt`. Da quel momento i programmi installati la propongono.
+   sulle tre piattaforme e pubblica la release con `MassiveRenamer-setup-windows-x64.exe`, `MassiveRenamer-windows-x64.exe`,
+   `MassiveRenamer-macos-arm64.dmg` e `.zip`, `MassiveRenamer-macos-x64.dmg` e `.zip` e `SHA256SUMS.txt`.
+   Da quel momento i programmi installati la propongono.
 
 ## Dove salva i dati
 

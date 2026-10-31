@@ -35,6 +35,22 @@ def test_asset_names():
     assert updater.asset_name("darwin", "arm64") == "MassiveRenamer-macos-arm64.zip"
     assert updater.asset_name("darwin", "x86_64") == "MassiveRenamer-macos-x64.zip"
     assert updater.asset_name("linux", "x86_64") is None
+    assert updater.asset_name("win32", "AMD64", installed=True) == "MassiveRenamer-setup-windows-x64.exe"
+
+
+def test_windows_installed(tmp_path):
+    exe = tmp_path / "MassiveRenamer.exe"
+    exe.write_bytes(b"MZ")
+    assert not updater.windows_installed(exe)  # versione portatile
+    (tmp_path / "unins000.exe").write_bytes(b"MZ")
+    assert updater.windows_installed(exe)  # messa dall'installer
+
+
+def test_windows_setup_script():
+    script = updater.windows_setup_script(1234, Path("C:/Temp/it's/MassiveRenamer-setup-1.0.exe"))
+    assert script.startswith("Wait-Process -Id 1234 ")
+    assert "'/VERYSILENT'" in script and "'/LAUNCH'" in script
+    assert "it''s" in script  # apice raddoppiato nelle stringhe PowerShell
 
 
 def test_parse_release_keeps_only_project_assets():

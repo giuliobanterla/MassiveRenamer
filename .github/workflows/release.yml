@@ -1,5 +1,5 @@
 # Pubblica una release quando si crea un tag vX.Y.Z: test e build su tutte le piattaforme,
-# poi una release GitHub con gli eseguibili e SHA256SUMS.txt, usati dall'aggiornamento automatico.
+# poi una release GitHub con installer, .dmg, eseguibili e SHA256SUMS.txt (usati dall'aggiornamento automatico).
 name: Release
 
 on:
@@ -48,9 +48,13 @@ jobs:
       - name: Prepara i file della release
         run: |
           mkdir release
-          cp artifacts/MassiveRenamer-windows-x64/MassiveRenamer.exe release/MassiveRenamer-windows-x64.exe
-          cp artifacts/MassiveRenamer-macos-arm64/MassiveRenamer-macos-arm64.zip release/
-          cp artifacts/MassiveRenamer-macos-x64/MassiveRenamer-macos-x64.zip release/
+          # I nomi sono quelli che cerca l'aggiornamento automatico (massiverenamer/updater.py)
+          cp artifacts/MassiveRenamer-windows-x64/MassiveRenamer-setup.exe release/MassiveRenamer-setup-windows-x64.exe
+          cp artifacts/MassiveRenamer-windows-x64/MassiveRenamer-portable.exe release/MassiveRenamer-windows-x64.exe
+          for arch in arm64 x64; do
+            cp artifacts/MassiveRenamer-macos-$arch/MassiveRenamer-macos-$arch.zip release/
+            cp artifacts/MassiveRenamer-macos-$arch/MassiveRenamer-macos-$arch.dmg release/
+          done
           cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Crea la release
