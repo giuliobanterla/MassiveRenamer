@@ -5,6 +5,7 @@ __pycache__/
 build/
 dist/
 *.spec
+!packaging/MassiveRenamer.spec
 .DS_Store
 *.egg-info/
 tests/screenshots/

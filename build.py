@@ -49,13 +49,11 @@ def windows_version_file() -> Path:
 
 
 def pyinstaller() -> None:
-    args = ["run.py", "--name", "MassiveRenamer", "--windowed", "--noconfirm", "--clean",
-            "--add-data", f"massiverenamer/resources{os.pathsep}massiverenamer/resources"]
-    if sys.platform == "darwin":
-        args += ["--osx-bundle-identifier", "info.gbss.massiverenamer", "--icon", "assets/icon/icon.icns"]
-    else:
-        args += ["--onefile", "--icon", "assets/icon/icon.ico", "--version-file", str(windows_version_file())]
-    PyInstaller.__main__.run(args)
+    # Le opzioni (icona, file da escludere per alleggerire l'eseguibile) sono in packaging/MassiveRenamer.spec
+    if sys.platform == "win32":
+        os.environ["MASSIVERENAMER_VERSION_FILE"] = str(windows_version_file())
+    PyInstaller.__main__.run([str(ROOT / "packaging" / "MassiveRenamer.spec"), "--noconfirm", "--clean",
+                              "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build")])
 
 
 def stamp_version() -> None:

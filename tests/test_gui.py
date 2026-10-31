@@ -232,3 +232,98 @@ def test_update_bar(window, qapp):
 def test_context_menu_only_when_installed(window):
     assert not window.act_context.isEnabled()  # da sorgente
     assert window.act_context.toolTip() == i18n.tr("context_unsupported")
+
+
+def test_path_bar(window, qapp, folder, tmp_path):
+    assert window.e_path.isEnabled() and window.e_path.text() == ""
+    window.add_paths([folder])
+    wait(qapp)
+    assert window.e_path.text() == str(folder)
+
+    # Scrivendo un'altra cartella la lista diventa il suo contenuto
+    other = tmp_path / "altra"
+    other.mkdir()
+    (other / "uno.txt").write_text("1")
+    window.e_path.setFocus()
+    window.e_path.selectAll()
+    QTest.keyClicks(window.e_path, str(other))
+    QTest.keyClick(window.e_path, Qt.Key_Return)
+    wait(qapp)
+    assert names(window) == ["uno.txt"] and window.e_path.text() == str(other)
+
+    # Una cartella che non esiste viene segnalata e la lista non cambia
+    window.e_path.selectAll()
+    QTest.keyClicks(window.e_path, str(tmp_path / "manca"))
+    QTest.keyClick(window.e_path, Qt.Key_Return)
+    assert names(window) == ["uno.txt"]
+    assert window.e_path.toolTip() == i18n.tr("path_invalid")
+
+    # Con file da più cartelle la barra si disattiva
+    window.table.setFocus()
+    window.add_paths([folder])
+    wait(qapp)
+    assert not window.e_path.isEnabled()
+    screenshot(window, "piu-cartelle")
+    window.clear_list()
+    assert window.e_path.isEnabled()
+
+
+def test_manual_order(window, qapp, folder):
+    window.add_paths([folder])
+    window.set_rules(Rules(numbering=True, num_position="replace"))
+    wait(qapp)
+    first = names(window)[0]
+    window.table.selectRow(0)
+    window.act_move_down.trigger()
+    assert names(window)[1] == first
+    assert window.cb_sort.currentData() == "manual"
+    assert window.plan[1].source.name == first and window.plan[1].new_name.startswith("2")
+    window.act_move_up.trigger()
+    assert names(window)[0] == first
+
+    # Il filtro ricalcola la lista ma l'ordine manuale resta
+    window.table.selectRow(0)
+    window.act_move_down.trigger()
+    order = names(window)
+    window.c_hidden.setChecked(True)
+    wait(qapp)
+    assert [n for n in names(window) if n in order] == order
+
+
+def test_highlight_spans():
+    assert gui.changed_spans("IMG_0003.JPG", "Foto 0003.JPG") == [("Foto ", True), ("0003.JPG", False)]
+    assert gui.changed_spans("a.txt", "a.txt") == [("a.txt", False)]
+
+
+def test_undo_several_renames(window, qapp, folder):
+    window.add_paths([folder / "note.txt"])
+    window.set_rules(Rules(prefix="1_"))
+    wait(qapp)
+    window.do_rename()
+    window.set_rules(Rules(prefix="2_"))
+    wait(qapp)
+    window.do_rename()
+    assert (folder / "2_1_note.txt").exists()
+    window.do_undo()
+    assert (folder / "1_note.txt").exists()
+    window.do_undo()
+    assert (folder / "note.txt").exists()
+    assert not window.act_undo.isEnabled()
+
+
+def test_recent_presets(window, qapp, tmp_path, dialogs):
+    window.set_rules(Rules(prefix="recente"))
+    dialogs["save"] = str(tmp_path / "mie regole")
+    window.save_preset()
+    window.set_rules(Rules())
+    window._fill_recent_menu()
+    entries = [a for a in window.m_recent.actions() if a.text() == "mie regole"]
+    assert entries
+    entries[0].trigger()
+    assert window.get_rules().prefix == "recente"
+
+    (tmp_path / "mie regole.json").unlink()
+    window.load_preset(str(tmp_path / "mie regole.json"))
+    assert window.settings["recent_presets"] == []
+    window._fill_recent_menu()
+    assert not window.m_recent.actions()[0].isEnabled()  # "Nessuna regola recente"

@@ -93,6 +93,17 @@ jobs:
           APPLE_APP_PASSWORD: ${{ inputs.sign && secrets.APPLE_APP_PASSWORD || '' }}
         run: python build.py
 
+      - name: Prova l'eseguibile (macOS)
+        if: runner.os == 'macOS'
+        run: dist/MassiveRenamer.app/Contents/MacOS/MassiveRenamer --self-test
+
+      - name: Prova l'eseguibile (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/MassiveRenamer.exe -ArgumentList '--self-test' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "self-test fallito: codice $($p.ExitCode)" }
+
       - name: Comprimi l'app per macOS
         if: runner.os == 'macOS'
         run: ditto -c -k --keepParent dist/MassiveRenamer.app dist/MassiveRenamer-${{ matrix.name }}.zip

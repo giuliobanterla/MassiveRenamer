@@ -24,7 +24,7 @@ CASE_MODES = ("keep", "upper", "lower", "title", "sentence")
 EXT_MODES = ("keep", "replace", "upper", "lower", "remove")
 NUM_POSITIONS = ("before", "after", "replace")
 DATE_MODES = ("none", "modified", "created", "taken")
-SORT_KEYS = ("name", "ext", "mtime", "size")
+SORT_KEYS = ("name", "ext", "mtime", "size", "manual")
 
 WINDOWS_INVALID_CHARS = set('<>:"/\\|?*')
 WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)} | {
@@ -358,18 +358,54 @@ def apply_plan(plan: list[PlanItem]) -> RenameResult:
 # --- Annullamento ---------------------------------------------------------------------------
 
 
-def save_journal(path: Path, done: list[tuple[Path, Path]]) -> None:
+MAX_UNDO = 20
+
+
+def _read_operations(path: Path) -> list[dict]:
+    """Operazioni registrate, dalla più vecchia alla più recente. Legge anche il formato della 0.2
+    (una sola operazione)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict) and "renames" in data:
+        data = {"operations": [data]}
+    ops = data.get("operations") if isinstance(data, dict) else None
+    return [op for op in ops if isinstance(op, dict) and isinstance(op.get("renames"), list)] if isinstance(ops, list) else []
+
+
+def _write_operations(path: Path, operations: list[dict]) -> None:
+    if not operations:
+        path.unlink(missing_ok=True)
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"time": time.time(), "renames": [[str(a), str(b)] for a, b in done]}
+    data = {"operations": operations[-MAX_UNDO:]}
     path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def save_journal(path: Path, done: list[tuple[Path, Path]]) -> None:
+    """Aggiunge una rinomina al registro; se ne tengono le ultime MAX_UNDO da poter annullare."""
+    operations = _read_operations(path)
+    operations.append({"time": time.time(), "renames": [[str(a), str(b)] for a, b in done]})
+    _write_operations(path, operations)
+
+
 def load_journal(path: Path) -> list[tuple[Path, Path]]:
+    """L'ultima rinomina registrata, o una lista vuota."""
+    operations = _read_operations(path)
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return [(Path(a), Path(b)) for a, b in data["renames"]]
-    except (OSError, ValueError, KeyError, TypeError):
+        return [(Path(a), Path(b)) for a, b in operations[-1]["renames"]] if operations else []
+    except (TypeError, ValueError):
         return []
+
+
+def pop_journal(path: Path) -> None:
+    """Toglie l'ultima rinomina dal registro, dopo averla annullata."""
+    _write_operations(path, _read_operations(path)[:-1])
+
+
+def journal_count(path: Path) -> int:
+    return len(_read_operations(path))
 
 
 def undo(done: list[tuple[Path, Path]]) -> RenameResult:
@@ -438,6 +474,8 @@ def sort_paths(paths: list[Path], key: str = "name", reverse: bool = False) -> l
         except OSError:
             return 0
 
+    if key == "manual":
+        return list(paths)  # l'ordine lo decide l'utente
     if key == "mtime":
         func = lambda p: (stat_or_zero(p, "st_mtime"), _natural_key(p.name))
     elif key == "size":

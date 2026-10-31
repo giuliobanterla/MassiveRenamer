@@ -1,3 +1,4 @@
+import json
 import os
 import struct
 import subprocess
@@ -235,3 +236,36 @@ def test_exif_date_taken(tmp_path):
     (tmp_path / "x.txt").write_text("hello")
     assert exif.date_taken(tmp_path / "x.txt") is None
     assert exif.date_taken(tmp_path / "missing.jpg") is None
+
+
+def test_journal_keeps_several_operations(tmp_path):
+    j = tmp_path / "j.json"
+    first = [(tmp_path / "a", tmp_path / "b")]
+    second = [(tmp_path / "c", tmp_path / "d")]
+    engine.save_journal(j, first)
+    engine.save_journal(j, second)
+    assert engine.journal_count(j) == 2
+    assert engine.load_journal(j) == second
+    engine.pop_journal(j)
+    assert engine.load_journal(j) == first
+    engine.pop_journal(j)
+    assert engine.journal_count(j) == 0 and not j.exists()
+
+    # Si tengono solo le ultime MAX_UNDO operazioni
+    for i in range(engine.MAX_UNDO + 5):
+        engine.save_journal(j, [(tmp_path / f"x{i}", tmp_path / f"y{i}")])
+    assert engine.journal_count(j) == engine.MAX_UNDO
+    assert engine.load_journal(j) == [(tmp_path / f"x{engine.MAX_UNDO + 4}", tmp_path / f"y{engine.MAX_UNDO + 4}")]
+
+
+def test_journal_reads_old_format(tmp_path):
+    j = tmp_path / "j.json"
+    j.write_text(json.dumps({"time": 1, "renames": [[str(tmp_path / "a"), str(tmp_path / "b")]]}))
+    assert engine.load_journal(j) == [(tmp_path / "a", tmp_path / "b")]
+    j.write_text("rotto")
+    assert engine.load_journal(j) == [] and engine.journal_count(j) == 0
+
+
+def test_manual_sort_keeps_order(tmp_path):
+    paths = [tmp_path / n for n in ("c", "a", "b")]
+    assert engine.sort_paths(paths, "manual") == paths
