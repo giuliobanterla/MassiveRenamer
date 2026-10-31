@@ -1032,10 +1032,12 @@ def self_test(app: QApplication, settings: dict) -> int:
     def stuck() -> None:
         step("bloccato")
         faulthandler.dump_traceback(all_threads=True)
+        if sys.platform == "darwin":  # pila nativa del thread principale, per capire quale chiamata è ferma
+            os.system(f"/usr/bin/sample {os.getpid()} 2 -mayDie 2>&1 | head -150")
         os._exit(2)
 
-    # Se qualcosa si blocca, meglio un errore dopo due minuti che una CI ferma per un'ora
-    watchdog = threading.Timer(120, stuck)
+    # Se qualcosa si blocca, meglio un errore dopo un minuto che una CI ferma per un'ora
+    watchdog = threading.Timer(60, stuck)
     watchdog.daemon = True
     watchdog.start()
     step("avvio")
