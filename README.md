@@ -56,6 +56,9 @@ finiscono nella finestra esistente. Con `MASSIVERENAMER_DEBUG_LOG=/percorso/file
 .venv/bin/python -m pytest
 ```
 
+I test comprendono anche l'interfaccia, eseguita senza schermo: le immagini della finestra finiscono in
+`tests/screenshots/` e in CI si scaricano dagli artifact `screenshots-<piattaforma>`.
+
 ## Eseguibili
 
 `python build.py` crea l'eseguibile per il sistema su cui gira, nella cartella `dist/`:

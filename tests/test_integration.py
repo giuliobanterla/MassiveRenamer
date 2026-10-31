@@ -51,12 +51,10 @@ def test_windows_registry(tmp_path):
     assert integration.win_installed_command(base=base) is None
 
 
-def test_single_instance_forwards_paths(tmp_path):
-    from PySide6.QtCore import QCoreApplication
-
+def test_single_instance_forwards_paths(tmp_path, qapp):
     from massiverenamer.single_instance import SingleInstance
 
-    app = QCoreApplication.instance() or QCoreApplication([])
+    app = qapp
     name = f"MassiveRenamerTest-{uuid.uuid4().hex[:8]}"
     first, second = SingleInstance(name), SingleInstance(name)
     received = []
