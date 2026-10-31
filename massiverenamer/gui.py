@@ -1020,18 +1020,36 @@ def self_test(app: QApplication, settings: dict) -> int:
     alleggerirlo, qui il programma si fermerebbe con un errore invece di aprire la finestra."""
     from . import updater
 
+    import faulthandler
     import threading
+    import time
+
+    start = time.monotonic()
+
+    def step(name: str) -> None:
+        print(f"self-test {time.monotonic() - start:6.1f}s {name}", flush=True)
+
+    def stuck() -> None:
+        step("bloccato")
+        faulthandler.dump_traceback(all_threads=True)
+        os._exit(2)
 
     # Se qualcosa si blocca, meglio un errore dopo due minuti che una CI ferma per un'ora
-    watchdog = threading.Timer(120, lambda: (print("self-test bloccato", flush=True), os._exit(2)))
+    watchdog = threading.Timer(120, stuck)
     watchdog.daemon = True
     watchdog.start()
+    step("avvio")
     updater._ssl_context()  # certificati e OpenSSL per l'aggiornamento automatico
+    step("ssl")
     SingleInstance(f"MassiveRenamer-selftest-{os.getpid()}")
+    step("istanza singola")
     window = MainWindow(settings, [])
+    step("finestra creata")
     window.show()
+    step("finestra mostrata")
     QTimer.singleShot(1500, app.quit)
     app.exec()
+    step("ciclo eventi terminato")
     window.close()
     watchdog.cancel()
     print(f"self-test ok: {__version__}, {app.style().name()}, {app.platformName()}", flush=True)
