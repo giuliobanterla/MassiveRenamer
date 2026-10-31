@@ -13,11 +13,13 @@ Su Windows ISCC.exe si cerca nel PATH, in INNO_SETUP o nella cartella d'installa
 """
 
 import os
+import json
 import plistlib
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import PyInstaller.__main__
@@ -161,6 +163,54 @@ def dmg_macos() -> None:
     print(f"==> Immagine disco: {DMG}")
 
 
+def retry(action, attempts: int = 3, wait: float = 30, sleep=time.sleep):
+    """Ripete `action` se fallisce: sui runner la rete a volte cade per qualche secondo."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return action()
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+            if attempt == attempts:
+                raise
+            print(f"==> Tentativo {attempt} fallito ({exc}), riprovo fra {wait:.0f} s")
+            sleep(wait)
+
+
+def notarize(path: Path, auth: list[str], runner=subprocess.run, sleep=time.sleep,
+             interval: float = 20, timeout: float = 3600, max_errors: int = 10) -> None:
+    """Invia `path` ad Apple e aspetta l'esito. Invece di `notarytool submit --wait`, che si ferma
+    al primo errore di rete, controlla lo stato a intervalli e tollera qualche errore di fila."""
+
+    def notarytool(*args: str) -> dict:
+        result = runner(["xcrun", "notarytool", *args, *auth, "--output-format", "json"],
+                        capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+
+    submission = retry(lambda: notarytool("submit", str(path)), sleep=sleep)["id"]
+    print(f"==> Inviato ad Apple: {submission}")
+    errors, waited = 0, 0.0
+    while True:
+        try:
+            status = notarytool("info", submission).get("status")
+            errors = 0
+        except (subprocess.CalledProcessError, OSError, ValueError) as exc:
+            errors += 1
+            if errors >= max_errors:
+                raise
+            print(f"==> Stato non disponibile ({exc}), riprovo")
+            status = "In Progress"
+        if status == "Accepted":
+            print("==> Notarizzazione accettata")
+            return
+        if status != "In Progress":
+            log = runner(["xcrun", "notarytool", "log", submission, *auth], capture_output=True, text=True)
+            print(log.stdout or log.stderr)
+            raise SystemExit(f"Notarizzazione non riuscita: {status}")
+        if waited >= timeout:
+            raise SystemExit(f"Notarizzazione ancora in corso dopo {timeout / 60:.0f} minuti: {submission}")
+        sleep(interval)
+        waited += interval
+
+
 def notarize_macos() -> None:
     """Notarizza il .dmg: la notarizzazione copre anche l'app che contiene, e il ticket viene
     applicato a entrambi (lo zip per l'aggiornamento automatico si fa dopo, dall'app)."""
@@ -170,10 +220,10 @@ def notarize_macos() -> None:
         return
     apple_id, team_id, password = creds
     print("==> Notarizzazione")
-    run("xcrun", "notarytool", "submit", str(DMG), "--apple-id", apple_id, "--team-id", team_id,
-        "--password", password, "--wait")
-    run("xcrun", "stapler", "staple", str(APP))
-    run("xcrun", "stapler", "staple", str(DMG))
+    notarize(DMG, ["--apple-id", apple_id, "--team-id", team_id, "--password", password])
+    # Anche lo stapler scarica il ticket da Apple
+    for path in (APP, DMG):
+        retry(lambda: run("xcrun", "stapler", "staple", str(path)))
     run("spctl", "--assess", "--type", "execute", "--verbose=2", str(APP))
     run("spctl", "--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", str(DMG))
 
