@@ -1047,10 +1047,12 @@ def self_test(app: QApplication, settings: dict) -> int:
     step("istanza singola")
     window = MainWindow(settings, [])
     step("finestra creata")
+    # Senza attivarla: quando la finestra diventa attiva Qt chiede a macOS l'icona di un tipo di file,
+    # e sul runner Intel appena avviato il servizio delle icone risponde dopo decine di minuti
+    window.setAttribute(Qt.WA_ShowWithoutActivating)
     window.show()
     step("finestra mostrata")
-    # Niente app.exec(): sul runner macOS Intel della CI il ciclo eventi di Cocoa non esegue i timer
-    # e non tornerebbe mai; così gli eventi vengono comunque elaborati per un secondo e mezzo
+    # Ciclo a tempo invece di app.exec(): se una chiamata di sistema si blocca, interviene il controllo sopra
     deadline = time.monotonic() + 1.5
     while time.monotonic() < deadline:
         app.processEvents()
