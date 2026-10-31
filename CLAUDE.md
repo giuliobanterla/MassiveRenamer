@@ -16,6 +16,8 @@ massiverenamer/single_instance.py  un secondo avvio passa i file alla finestra a
 massiverenamer/exif.py     data di scatto da JPEG/TIFF senza dipendenze
 tests/                     pytest: motore, aggiornamento, integrazione e interfaccia (test_gui.py, senza schermo)
 build.py                   eseguibile con PyInstaller (.app su macOS, .exe su Windows); firma e notarizza su macOS
+packaging/MassiveRenamer.spec  opzioni PyInstaller e parti di Qt escluse; `--self-test` (eseguito dalla CI) verifica
+                           che l'eseguibile parta: se si usa un nuovo modulo Qt, toglierlo da UNUSED_QT
 tools/make_icons.py        disegna l'icona (assets/icon/, massiverenamer/resources/)
 packaging/macos/           entitlements per l'hardened runtime
 ```

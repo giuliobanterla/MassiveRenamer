@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+import difflib
+import html
 import json
 import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractTableModel, QEvent, QModelIndex, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence
+from PySide6.QtCore import QAbstractTableModel, QDir, QEvent, QItemSelectionModel, QModelIndex, QRectF, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QIcon, QKeySequence, QPalette, QTextDocument
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
+    QCompleter,
+    QFileSystemModel,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -26,6 +30,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QSplitter,
     QTableView,
     QTableWidget,
@@ -124,6 +131,49 @@ class PlanModel(QAbstractTableModel):
         return None
 
 
+def changed_spans(old: str, new: str) -> list[tuple[str, bool]]:
+    """Il nuovo nome diviso in pezzi, ognuno con True se è cambiato rispetto al vecchio."""
+    spans: list[tuple[str, bool]] = []
+    for tag, _i1, _i2, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if j2 > j1:
+            spans.append((new[j1:j2], tag != "equal"))
+    return spans
+
+
+class DiffDelegate(QStyledItemDelegate):
+    """Colonna «Nuovo nome»: le parti cambiate rispetto al nome attuale sono evidenziate."""
+
+    HIGHLIGHT = QColor(250, 204, 21, 110)
+
+    def paint(self, painter, option, index):
+        item = index.model().plan[index.row()]
+        if item.status == Status.UNCHANGED:
+            return super().paint(painter, option, index)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        selected = bool(opt.state & QStyle.State_Selected)
+        color = opt.palette.color(QPalette.HighlightedText) if selected else index.data(Qt.ForegroundRole)
+        opt.text = ""
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+
+        parts = []
+        for text, changed in changed_spans(item.source.name, item.new_name):
+            text = html.escape(text).replace(" ", "&nbsp;")
+            parts.append(f'<span style="background-color:{self.HIGHLIGHT.name(QColor.HexArgb)}">{text}</span>'
+                         if changed else text)
+        doc = QTextDocument()
+        doc.setDocumentMargin(0)
+        doc.setDefaultFont(opt.font)
+        doc.setHtml(f'<span style="color:{QColor(color).name()}; white-space:pre">{"".join(parts)}</span>')
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        painter.save()
+        painter.setClipRect(rect)
+        painter.translate(rect.left() + 2, rect.top() + (rect.height() - doc.size().height()) / 2)
+        doc.drawContents(painter, QRectF(0, 0, rect.width(), rect.height()))
+        painter.restore()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, settings: dict, initial_paths: list[str]):
         super().__init__()
@@ -168,6 +218,8 @@ class MainWindow(QMainWindow):
         self.act_remove = action("remove", self.remove_selected, QKeySequence.Delete)
         self.act_clear = action("clear", self.clear_list)
         self.act_clear.setShortcuts([QKeySequence("Ctrl+Shift+Backspace"), QKeySequence("Ctrl+Shift+Delete")])
+        self.act_move_up = action("move_up", lambda: self.move_selected(-1), "Alt+Up")
+        self.act_move_down = action("move_down", lambda: self.move_selected(1), "Alt+Down")
         self.act_rename = action("rename", self.do_rename, "Ctrl+R")
         self.act_undo = action("undo", self.do_undo, QKeySequence.Undo)
         self.act_export = action("export_script", self.export_script)
@@ -191,11 +243,15 @@ class MainWindow(QMainWindow):
         act_auto.toggled.connect(self.updates.set_auto)
 
         m_file = self.menuBar().addMenu(tr("menu_file"))
-        for a in (self.act_add_files, self.act_add_folder, None, self.act_load, self.act_save,
-                  None, self.act_export, None, self.act_context, None, act_quit):
+        for a in (self.act_add_files, self.act_add_folder, None, self.act_load):
+            m_file.addSeparator() if a is None else m_file.addAction(a)
+        self.m_recent = m_file.addMenu(tr("recent_presets"))
+        self.m_recent.aboutToShow.connect(self._fill_recent_menu)
+        for a in (self.act_save, None, self.act_export, None, self.act_context, None, act_quit):
             m_file.addSeparator() if a is None else m_file.addAction(a)
         m_edit = self.menuBar().addMenu(tr("menu_edit"))
-        for a in (self.act_rename, self.act_undo, None, self.act_remove, self.act_clear, None, self.act_reset):
+        for a in (self.act_rename, self.act_undo, None, self.act_move_up, self.act_move_down, None,
+                  self.act_remove, self.act_clear, None, self.act_reset):
             m_edit.addSeparator() if a is None else m_edit.addAction(a)
         m_lang = self.menuBar().addMenu(tr("language"))
         group = QActionGroup(self)
@@ -427,7 +483,24 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # Cartella dei file in lista: si può scrivere a mano per passare a un'altra cartella
+        path_row = QHBoxLayout()
+        self.e_path = QLineEdit()
+        self.e_path.setClearButtonEnabled(True)
+        dirs = QFileSystemModel(self.e_path)
+        dirs.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Drives)
+        dirs.setRootPath("")
+        completer = QCompleter(dirs, self.e_path)
+        completer.setCaseSensitivity(Qt.CaseInsensitive if sys.platform in ("win32", "darwin") else Qt.CaseSensitive)
+        self.e_path.setCompleter(completer)
+        self.e_path.returnPressed.connect(self.open_typed_path)
+        self.e_path.textEdited.connect(lambda: self._set_path_error(False))
+        path_row.addWidget(QLabel(tr("path_label")))
+        path_row.addWidget(self.e_path, 1)
+        layout.addLayout(path_row)
+
         self.table = QTableView()
+        self.table.setItemDelegateForColumn(1, DiffDelegate(self.table))
         self.table.setModel(self.model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -448,7 +521,14 @@ class MainWindow(QMainWindow):
         self.btn_clear = QPushButton(tr("clear"))
         self.btn_clear.setToolTip(self.act_clear.shortcut().toString(QKeySequence.NativeText))
         self.btn_clear.clicked.connect(self.clear_list)
+        self.btn_up, self.btn_down = QPushButton("↑"), QPushButton("↓")
+        for button, act in ((self.btn_up, self.act_move_up), (self.btn_down, self.act_move_down)):
+            button.setToolTip(f"{act.text()} ({act.shortcut().toString(QKeySequence.NativeText)})")
+            button.setMaximumWidth(40)
+            button.clicked.connect(act.trigger)
         bottom.addWidget(self.lbl_summary, 1)
+        bottom.addWidget(self.btn_up)
+        bottom.addWidget(self.btn_down)
         bottom.addWidget(self.btn_clear)
         bottom.addWidget(self.btn_rename)
         layout.addLayout(bottom)
@@ -619,13 +699,78 @@ class MainWindow(QMainWindow):
                 if key not in known and key not in self.excluded:
                     known.add(key)
                     paths.append(p)
+        if self.cb_sort.currentData() == "manual":
+            # In ordine manuale i file già in lista restano dove l'utente li ha messi; i nuovi vanno in fondo
+            previous = {engine.name_key(p): i for i, p in enumerate(self.paths)}
+            paths.sort(key=lambda p: previous.get(engine.name_key(p), len(previous)))
         self.paths = paths
         debug_log(f"lista: {[p.name for p in paths]}")
         self.resort()
 
     def resort(self, *_):
-        self.paths = engine.sort_paths(self.paths, self.cb_sort.currentData(), self.c_reverse.isChecked())
+        manual = self.cb_sort.currentData() == "manual"
+        self.c_reverse.setEnabled(not manual)
+        if not manual:
+            self.paths = engine.sort_paths(self.paths, self.cb_sort.currentData(), self.c_reverse.isChecked())
+        self.update_path_bar()
         self._changed()
+
+    def move_selected(self, step: int) -> None:
+        """Sposta su o giù i file selezionati; la numerazione segue l'ordine della lista."""
+        rows = sorted({i.row() for i in self.table.selectionModel().selectedRows()}, reverse=step > 0)
+        if not rows or (step < 0 and rows[0] == 0) or (step > 0 and rows[0] == len(self.paths) - 1):
+            return
+        for row in rows:
+            self.paths[row], self.paths[row + step] = self.paths[row + step], self.paths[row]
+        self.cb_sort.blockSignals(True)
+        self.cb_sort.setCurrentIndex(self.cb_sort.findData("manual"))
+        self.cb_sort.blockSignals(False)
+        self.c_reverse.setEnabled(False)
+        self.refresh_preview()
+        selection = self.table.selectionModel()
+        selection.clearSelection()
+        for row in rows:
+            selection.select(self.model.index(row + step, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        self.table.scrollTo(self.model.index(rows[-1] + step, 0))
+
+    def folders(self) -> list[Path]:
+        """Cartelle da cui vengono i file in lista: quelle aggiunte e quelle dei singoli file."""
+        found: dict[str, Path] = {}
+        for source in self.sources:
+            folder = source if source.is_dir() else source.parent
+            found.setdefault(engine.name_key(folder), folder)
+        return list(found.values())
+
+    def update_path_bar(self) -> None:
+        if not hasattr(self, "e_path") or (self.e_path.hasFocus() and self.e_path.isModified()):
+            return
+        folders = self.folders()
+        self.e_path.setEnabled(len(folders) <= 1)
+        self.e_path.setText(str(folders[0]) if len(folders) == 1 else "")
+        self.e_path.setPlaceholderText(tr("path_multiple") if len(folders) > 1 else tr("path_placeholder"))
+        self.e_path.setModified(False)
+        self._set_path_error(False)
+
+    def _set_path_error(self, error: bool) -> None:
+        self.e_path.setStyleSheet("QLineEdit { border: 1px solid #cf222e; }" if error else "")
+        self.e_path.setToolTip(tr("path_invalid") if error else "")
+
+    def open_typed_path(self) -> None:
+        """Passa alla cartella scritta nella barra: la lista diventa il contenuto di quella cartella."""
+        text = self.e_path.text().strip().strip('"')
+        folder = Path(text).expanduser() if text else None
+        if folder is None or not folder.is_dir():
+            self._set_path_error(True)
+            return
+        folder = folder.absolute()
+        self.e_path.setModified(False)
+        if [engine.name_key(f) for f in self.folders()] == [engine.name_key(folder)] and \
+                all(s.is_dir() for s in self.sources):
+            self.update_path_bar()
+            return
+        self.settings["last_dir"] = str(folder)
+        self.sources, self.excluded = [folder], set()
+        self.rebuild_list()
 
     def choose_files(self):
         files, _ = QFileDialog.getOpenFileNames(self, tr("select_files"), self.settings.get("last_dir", ""))
@@ -648,6 +793,7 @@ class MainWindow(QMainWindow):
 
     def clear_list(self):
         self.paths, self.sources, self.excluded = [], [], set()
+        self.update_path_bar()
         self.refresh_preview()
 
     def dragEnterEvent(self, event):
@@ -676,6 +822,7 @@ class MainWindow(QMainWindow):
     def _replace_paths(self, mapping: dict[Path, Path]) -> None:
         self.paths = [mapping.get(p, p) for p in self.paths]
         self.sources = [mapping.get(p, p) for p in self.sources]
+        self.update_path_bar()
 
     def _report(self, result: engine.RenameResult, key: str) -> None:
         if result.errors:
@@ -715,7 +862,7 @@ class MainWindow(QMainWindow):
         if QMessageBox.question(self, tr("confirm_title"), tr("confirm_undo", count=len(done))) != QMessageBox.Yes:
             return
         result = engine.undo(done)
-        JOURNAL_FILE.unlink(missing_ok=True)
+        engine.pop_journal(JOURNAL_FILE)
         self._replace_paths({new: old for old, new in result.done})
         self.refresh_preview()
         self._report(result, "undo_done")
@@ -755,11 +902,13 @@ class MainWindow(QMainWindow):
             data = {"massiverenamer": 1, "rules": self.get_rules().to_dict(), "files": self.file_options()}
             try:
                 Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+                self._remember_preset(path)
             except OSError as exc:
                 QMessageBox.critical(self, tr("error_title"), str(exc))
 
-    def load_preset(self):
-        path, _ = QFileDialog.getOpenFileName(self, tr("load_preset"), "", tr("preset_filter"))
+    def load_preset(self, path: str | None = None):
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, tr("load_preset"), "", tr("preset_filter"))
         if not path:
             return
         try:
@@ -767,8 +916,36 @@ class MainWindow(QMainWindow):
             self.set_rules(Rules.from_dict(data["rules"]))
             if isinstance(data.get("files"), dict):
                 self.file_options_from_settings(data["files"])
+            self._remember_preset(path)
+        except FileNotFoundError:
+            self._forget_preset(path)
+            QMessageBox.critical(self, tr("error_title"), tr("recent_missing", path=path))
         except (OSError, ValueError, KeyError, TypeError):
             QMessageBox.critical(self, tr("error_title"), tr("preset_error"))
+
+    MAX_RECENT = 8
+
+    def _remember_preset(self, path: str) -> None:
+        path = str(Path(path).absolute())
+        recent = [p for p in self.settings.get("recent_presets", []) if p != path]
+        self.settings["recent_presets"] = [path] + recent[: self.MAX_RECENT - 1]
+
+    def _forget_preset(self, path: str) -> None:
+        self.settings["recent_presets"] = [p for p in self.settings.get("recent_presets", []) if p != str(path)]
+
+    def _fill_recent_menu(self) -> None:
+        self.m_recent.clear()
+        recent = self.settings.get("recent_presets", [])
+        for path in recent:
+            action = self.m_recent.addAction(Path(path).stem)
+            action.setToolTip(path)
+            action.setStatusTip(path)
+            action.triggered.connect(lambda _=False, p=path: self.load_preset(p))
+        if recent:
+            self.m_recent.addSeparator()
+            self.m_recent.addAction(tr("recent_clear"), lambda: self.settings.update(recent_presets=[]))
+        else:
+            self.m_recent.addAction(tr("recent_empty")).setEnabled(False)
 
     def change_language(self, code: str):
         if code == current_language():
@@ -779,6 +956,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self.set_rules(rules)
         self.file_options_from_settings(opts)
+        self.update_path_bar()
         self.refresh_preview()
 
     def toggle_context_menu(self, on: bool):

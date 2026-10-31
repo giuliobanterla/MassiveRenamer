@@ -19,10 +19,12 @@ Interfaccia in italiano e in inglese, scelta dal menu **Lingua**.
   dei RAW basati su TIFF; se manca si usa la data di modifica), con formato a scelta (`%Y-%m-%d`, `%Y%m%d_%H%M`…).
 - **Numerazione** con valore iniziale, incremento, numero di cifre, posizione (prima, dopo o al posto del nome) e separatore.
 - **Estensione**: sostituita, maiuscola, minuscola o rimossa.
-- **Anteprima immediata**, con i problemi segnalati prima di rinominare: nomi duplicati, file già esistenti, caratteri non ammessi dal sistema, nomi riservati di Windows, nomi vuoti.
-- **Annulla l'ultima rinomina**, anche dopo aver chiuso il programma.
+- **Barra del percorso** sopra la lista: mostra la cartella dei file e si può scrivere a mano (con completamento) per
+  passare a un'altra cartella. Si disattiva quando i file vengono da più cartelle.
+- **Anteprima immediata**, con le parti del nome che cambiano evidenziate in giallo e i problemi segnalati prima di rinominare: nomi duplicati, file già esistenti, caratteri non ammessi dal sistema, nomi riservati di Windows, nomi vuoti.
+- **Annulla** le ultime rinomine (fino a 20, una alla volta), anche dopo aver chiuso il programma.
 - **Esporta script** (`.bat` su Windows, `.sh` su macOS) per rifare la rinomina, insieme allo script che la annulla.
-- **Salva e carica le regole** in un file `.json`. Le ultime regole usate vengono ricordate.
+- **Salva e carica le regole** in un file `.json`, con il menu **File → Regole recenti** per ritrovarle. Le ultime regole usate vengono ricordate.
 - Aggiunta di file e cartelle, anche trascinandoli nella finestra, con filtro (`*.jpg;*.png`), sottocartelle e file nascosti a scelta.
   Cambiando filtro o opzioni la lista si ricalcola subito; i file tolti a mano restano fuori finché non si riaggiunge la cartella.
 - **Svuota lista** con il pulsante accanto a «Rinomina» o con ⌘⇧⌫ (macOS) / Ctrl+Shift+Backspace (Windows).
@@ -30,6 +32,7 @@ Interfaccia in italiano e in inglese, scelta dal menu **Lingua**.
   Su Windows in Esplora risorse (su Windows 11 sotto «Mostra altre opzioni»), su macOS nelle Azioni rapide del Finder.
   Più file selezionati, o più avvii, finiscono nella stessa finestra.
 - Ordinamento per nome (i numeri sono ordinati come numeri: `img2` prima di `img10`), estensione, data di modifica o dimensione. La numerazione segue quest'ordine.
+- **Ordine manuale**: con ↑ e ↓ (o Alt+↑/↓) si spostano i file selezionati; l'ordine resta anche cambiando filtro.
 
 Gli spostamenti avvengono in due passaggi attraverso nomi temporanei. Così funzionano anche gli scambi di nome tra due file
 e i cambi solo di maiuscole/minuscole (`foto.jpg` → `FOTO.JPG`), che su Windows e macOS sono un caso difficile.
@@ -61,7 +64,8 @@ I test comprendono anche l'interfaccia, eseguita senza schermo: le immagini dell
 
 ## Eseguibili
 
-`python build.py` crea l'eseguibile per il sistema su cui gira, nella cartella `dist/`:
+`python build.py` crea l'eseguibile per il sistema su cui gira, nella cartella `dist/`, con le opzioni di
+`packaging/MassiveRenamer.spec` (che toglie le parti di Qt non usate: l'app per macOS pesa circa 70 MB invece di 104):
 
 - su macOS `MassiveRenamer.app`
 - su Windows `MassiveRenamer.exe`, un file unico che non va installato
