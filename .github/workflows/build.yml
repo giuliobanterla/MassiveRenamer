@@ -95,10 +95,12 @@ jobs:
 
       - name: Prova l'eseguibile (macOS)
         if: runner.os == 'macOS'
+        timeout-minutes: 5
         run: dist/MassiveRenamer.app/Contents/MacOS/MassiveRenamer --self-test
 
       - name: Prova l'eseguibile (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $p = Start-Process -FilePath dist/MassiveRenamer.exe -ArgumentList '--self-test' -Wait -PassThru
