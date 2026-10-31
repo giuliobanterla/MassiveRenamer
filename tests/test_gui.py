@@ -236,6 +236,7 @@ def test_context_menu_only_when_installed(window):
 
 def test_path_bar(window, qapp, folder, tmp_path):
     assert window.e_path.isEnabled() and window.e_path.text() == ""
+    assert window.e_path.completer() is None  # niente lettura dei dischi all'avvio
     window.add_paths([folder])
     wait(qapp)
     assert window.e_path.text() == str(folder)
@@ -250,6 +251,7 @@ def test_path_bar(window, qapp, folder, tmp_path):
     QTest.keyClick(window.e_path, Qt.Key_Return)
     wait(qapp)
     assert names(window) == ["uno.txt"] and window.e_path.text() == str(other)
+    assert window.e_path.completer() is not None  # creato alla prima digitazione
 
     # Una cartella che non esiste viene segnalata e la lista non cambia
     window.e_path.selectAll()

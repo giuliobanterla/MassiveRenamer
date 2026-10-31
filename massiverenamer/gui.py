@@ -487,14 +487,8 @@ class MainWindow(QMainWindow):
         path_row = QHBoxLayout()
         self.e_path = QLineEdit()
         self.e_path.setClearButtonEnabled(True)
-        dirs = QFileSystemModel(self.e_path)
-        dirs.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Drives)
-        dirs.setRootPath("")
-        completer = QCompleter(dirs, self.e_path)
-        completer.setCaseSensitivity(Qt.CaseInsensitive if sys.platform in ("win32", "darwin") else Qt.CaseSensitive)
-        self.e_path.setCompleter(completer)
         self.e_path.returnPressed.connect(self.open_typed_path)
-        self.e_path.textEdited.connect(lambda: self._set_path_error(False))
+        self.e_path.textEdited.connect(self._on_path_edited)
         path_row.addWidget(QLabel(tr("path_label")))
         path_row.addWidget(self.e_path, 1)
         layout.addLayout(path_row)
@@ -750,6 +744,19 @@ class MainWindow(QMainWindow):
         self.e_path.setPlaceholderText(tr("path_multiple") if len(folders) > 1 else tr("path_placeholder"))
         self.e_path.setModified(False)
         self._set_path_error(False)
+
+    def _on_path_edited(self) -> None:
+        self._set_path_error(False)
+        if self.e_path.completer() is None:
+            # Il completamento delle cartelle parte solo quando si scrive: all'avvio QFileSystemModel
+            # leggerebbe i dischi e su macOS può restare bloccato a lungo (successo sul runner Intel della CI)
+            dirs = QFileSystemModel(self.e_path)
+            dirs.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Drives)
+            dirs.setRootPath("")
+            completer = QCompleter(dirs, self.e_path)
+            completer.setCaseSensitivity(
+                Qt.CaseInsensitive if sys.platform in ("win32", "darwin") else Qt.CaseSensitive)
+            self.e_path.setCompleter(completer)
 
     def _set_path_error(self, error: bool) -> None:
         self.e_path.setStyleSheet("QLineEdit { border: 1px solid #cf222e; }" if error else "")
@@ -1013,14 +1020,47 @@ def self_test(app: QApplication, settings: dict) -> int:
     alleggerirlo, qui il programma si fermerebbe con un errore invece di aprire la finestra."""
     from . import updater
 
+    import faulthandler
+    import threading
+    import time
+
+    start = time.monotonic()
+
+    def step(name: str) -> None:
+        print(f"self-test {time.monotonic() - start:6.1f}s {name}", flush=True)
+
+    def stuck() -> None:
+        step("bloccato")
+        faulthandler.dump_traceback(all_threads=True)
+        if sys.platform == "darwin":  # pila nativa del thread principale, per capire quale chiamata è ferma
+            os.system(f"/usr/bin/sample {os.getpid()} 2 -mayDie 2>&1 | head -150")
+        os._exit(2)
+
+    # Se qualcosa si blocca, meglio un errore dopo un minuto che una CI ferma per un'ora
+    watchdog = threading.Timer(60, stuck)
+    watchdog.daemon = True
+    watchdog.start()
+    step("avvio")
     updater._ssl_context()  # certificati e OpenSSL per l'aggiornamento automatico
+    step("ssl")
     SingleInstance(f"MassiveRenamer-selftest-{os.getpid()}")
+    step("istanza singola")
     window = MainWindow(settings, [])
+    step("finestra creata")
     window.show()
-    QTimer.singleShot(1500, app.quit)
-    app.exec()
+    step("finestra mostrata")
+    # Quando la finestra diventa attiva Qt chiede a macOS un'icona: se il servizio delle icone non
+    # risponde (succede sul runner Intel della CI) il ciclo eventi resterebbe fermo, e la CI lo salta
+    if not os.environ.get("MASSIVERENAMER_SELFTEST_SKIP_EVENTS"):
+        # Ciclo a tempo invece di app.exec(): se una chiamata si blocca, interviene il controllo sopra
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+        step("eventi elaborati")
     window.close()
-    print(f"self-test ok: {__version__}, {app.style().name()}, {app.platformName()}")
+    watchdog.cancel()
+    print(f"self-test ok: {__version__}, {app.style().name()}, {app.platformName()}", flush=True)
     return 0
 
 

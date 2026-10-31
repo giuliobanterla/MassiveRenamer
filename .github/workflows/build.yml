@@ -95,10 +95,19 @@ jobs:
 
       - name: Prova l'eseguibile (macOS)
         if: runner.os == 'macOS'
-        run: dist/MassiveRenamer.app/Contents/MacOS/MassiveRenamer --self-test
+        timeout-minutes: 5
+        run: |
+          # Sul runner Intel il servizio delle icone di macOS a volte non risponde a nessun programma, e
+          # l'attivazione della finestra resterebbe ferma: in quel caso si salta il ciclo eventi
+          if ! perl -e 'alarm 20; exec @ARGV' osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.iconForContentType($.UTTypeFolder); ""'; then
+            echo "::warning::Il servizio delle icone di macOS non risponde: self-test senza ciclo eventi"
+            export MASSIVERENAMER_SELFTEST_SKIP_EVENTS=1
+          fi
+          dist/MassiveRenamer.app/Contents/MacOS/MassiveRenamer --self-test
 
       - name: Prova l'eseguibile (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $p = Start-Process -FilePath dist/MassiveRenamer.exe -ArgumentList '--self-test' -Wait -PassThru
