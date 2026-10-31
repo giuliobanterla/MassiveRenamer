@@ -1047,9 +1047,13 @@ def self_test(app: QApplication, settings: dict) -> int:
     step("finestra creata")
     window.show()
     step("finestra mostrata")
-    QTimer.singleShot(1500, app.quit)
-    app.exec()
-    step("ciclo eventi terminato")
+    # Niente app.exec(): sul runner macOS Intel della CI il ciclo eventi di Cocoa non esegue i timer
+    # e non tornerebbe mai; così gli eventi vengono comunque elaborati per un secondo e mezzo
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    step("eventi elaborati")
     window.close()
     watchdog.cancel()
     print(f"self-test ok: {__version__}, {app.style().name()}, {app.platformName()}", flush=True)
