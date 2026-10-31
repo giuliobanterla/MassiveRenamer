@@ -93,6 +93,16 @@ jobs:
           APPLE_APP_PASSWORD: ${{ inputs.sign && secrets.APPLE_APP_PASSWORD || '' }}
         run: python build.py
 
+      - name: Diagnostica servizio icone (temporaneo)
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: |
+          probe() { /usr/bin/time -p perl -e 'alarm 60; exec @ARGV' osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.iconForContentType($.UTTypeFolder); "icona ok"' || echo "probe fallita: $?"; }
+          probe
+          sudo killall iconservicesd iconservicesagent || true
+          sleep 3
+          probe
+
       - name: Prova l'eseguibile (macOS)
         if: runner.os == 'macOS'
         timeout-minutes: 5
