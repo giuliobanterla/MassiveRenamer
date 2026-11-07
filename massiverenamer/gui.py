@@ -52,11 +52,17 @@ from .update_ui import UpdateBar, UpdateController
 SETTINGS_FILE = engine.config_dir() / "settings.json"
 JOURNAL_FILE = engine.config_dir() / "last_rename.json"
 
+# Colori dell'anteprima per tema chiaro e scuro: contrasto di almeno 4,5:1 con lo sfondo delle righe
 STATUS_COLORS = {
-    Status.OK: QColor("#1a7f37"),
-    Status.UNCHANGED: QColor("#808080"),
+    False: {Status.OK: QColor("#1a7f37"), Status.UNCHANGED: QColor("#6e6e6e")},
+    True: {Status.OK: QColor("#56d364"), Status.UNCHANGED: QColor("#b0b0b0")},
 }
-PROBLEM_COLOR = QColor("#cf222e")
+PROBLEM_COLORS = {False: QColor("#cf222e"), True: QColor("#ff7b72")}
+
+
+def status_color(status: Status, palette: QPalette) -> QColor:
+    dark = palette.color(QPalette.Base).lightness() < 128
+    return STATUS_COLORS[dark].get(status, PROBLEM_COLORS[dark])
 
 
 def debug_log(message: str) -> None:
@@ -127,7 +133,7 @@ class PlanModel(QAbstractTableModel):
             if col == 3:
                 return str(item.source.parent)
         if role == Qt.ForegroundRole and col in (1, 2):
-            return STATUS_COLORS.get(item.status, PROBLEM_COLOR)
+            return status_color(item.status, QApplication.palette())
         return None
 
 
@@ -143,7 +149,8 @@ def changed_spans(old: str, new: str) -> list[tuple[str, bool]]:
 class DiffDelegate(QStyledItemDelegate):
     """Colonna «Nuovo nome»: le parti cambiate rispetto al nome attuale sono evidenziate."""
 
-    HIGHLIGHT = QColor(250, 204, 21, 110)
+    # Testo scuro su giallo pieno: si legge con qualunque tema e colore di stato
+    HIGHLIGHT, HIGHLIGHT_TEXT = "#fde047", "#1a1a1a"
 
     def paint(self, painter, option, index):
         item = index.model().plan[index.row()]
@@ -160,7 +167,7 @@ class DiffDelegate(QStyledItemDelegate):
         parts = []
         for text, changed in changed_spans(item.source.name, item.new_name):
             text = html.escape(text).replace(" ", "&nbsp;")
-            parts.append(f'<span style="background-color:{self.HIGHLIGHT.name(QColor.HexArgb)}">{text}</span>'
+            parts.append(f'<span style="background-color:{self.HIGHLIGHT}; color:{self.HIGHLIGHT_TEXT}">{text}</span>'
                          if changed else text)
         doc = QTextDocument()
         doc.setDocumentMargin(0)
@@ -192,7 +199,10 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self.resize(1200, 760)
         self._build_ui()
-        self.set_rules(Rules.from_dict(settings.get("rules", {})))
+        saved = settings.get("rules", {})
+        rules = Rules.from_dict(saved)
+        # Regole salvate da una versione senza caselle: non si riparte con vecchie regole attive
+        self.set_rules(rules if "find_enabled" in saved else rules.all_off())
         self.file_options_from_settings()
         self.add_paths([Path(p) for p in initial_paths])
         self.refresh_preview()
@@ -225,7 +235,7 @@ class MainWindow(QMainWindow):
         self.act_export = action("export_script", self.export_script)
         self.act_load = action("load_preset", self.load_preset)
         self.act_save = action("save_preset", self.save_preset)
-        self.act_reset = action("reset_rules", lambda: self.set_rules(Rules()))
+        self.act_reset = action("reset_rules", lambda: self.set_rules(Rules().all_off()))
         self.act_context = QAction(tr("context_menu"), self, checkable=True)
         self.act_context.setEnabled(integration.supported())
         self.act_context.setChecked(integration.is_installed())
@@ -317,26 +327,29 @@ class MainWindow(QMainWindow):
         w.currentIndexChanged.connect(self._changed)
         return w
 
-    def _group(self, key: str, checkable: bool = False) -> tuple[QGroupBox, QFormLayout]:
+    def _group(self, key: str) -> tuple[QGroupBox, QFormLayout]:
+        """Gruppo di una regola: la casella nel titolo la attiva e abilita i suoi campi."""
         box = QGroupBox(tr(key))
-        if checkable:
-            box.setCheckable(True)
-            box.toggled.connect(self._changed)
+        box.setCheckable(True)
+        box.toggled.connect(self._changed)
+        self._rule_groups.append(box)
         form = QFormLayout(box)
         return box, form
 
     def _build_rules_panel(self) -> QWidget:
         self._spins: list[QSpinBox] = []
+        self._rule_groups: list[QGroupBox] = []
         inner = QWidget()
         layout = QVBoxLayout(inner)
 
-        box, form = self._group("grp_replace_all", checkable=True)
+        box, form = self._group("grp_replace_all")
         self.g_replace_all = box
         self.e_replace_all = self._line()
         form.addRow(tr("replace_all_text"), self.e_replace_all)
         layout.addWidget(box)
 
         box, form = self._group("grp_find")
+        self.g_find = box
         self.e_find, self.e_replace = self._line(), self._line()
         self.c_match_case, self.c_regex = self._check("match_case"), self._check("use_regex")
         form.addRow(tr("find"), self.e_find)
@@ -363,6 +376,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(box)
 
         box, form = self._group("grp_remove")
+        self.g_remove = box
         self.s_remove_pos, self.s_remove_count = self._spin(1, 255), self._spin(0, 255)
         self.c_remove_end = self._check("from_end")
         row = QHBoxLayout()
@@ -374,6 +388,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(box)
 
         box, form = self._group("grp_trim")
+        self.g_trim = box
         self.s_trim_left, self.s_trim_right = self._spin(0, 255), self._spin(0, 255)
         row = QHBoxLayout()
         row.addWidget(QLabel(tr("trim_left")))
@@ -384,6 +399,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(box)
 
         box, form = self._group("grp_insert_at")
+        self.g_insert_at = box
         self.e_insert_text = self._line()
         self.s_insert_pos = self._spin(0, 255)
         self.c_insert_end = self._check("from_end")
@@ -395,17 +411,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(box)
 
         box, form = self._group("grp_case")
+        self.g_case = box
         self.cb_case = self._combo("case", engine.CASE_MODES)
         form.addRow(self.cb_case)
         layout.addWidget(box)
 
         box, form = self._group("grp_insert")
+        self.g_affix = box
         self.e_prefix, self.e_suffix = self._line(), self._line()
         form.addRow(tr("prefix"), self.e_prefix)
         form.addRow(tr("suffix"), self.e_suffix)
         layout.addWidget(box)
 
         box, form = self._group("grp_date")
+        self.g_date = box
         self.cb_date = self._combo("date", engine.DATE_MODES)
         self.e_date_format = self._line()
         self.e_date_format.setToolTip(tr("date_format_help"))
@@ -422,7 +441,7 @@ class MainWindow(QMainWindow):
         self.cb_date.currentIndexChanged.connect(self._update_date_fields)
         layout.addWidget(box)
 
-        box, form = self._group("grp_numbering", checkable=True)
+        box, form = self._group("grp_numbering")
         self.g_numbering = box
         self.s_num_start, self.s_num_step = self._spin(-999999, 999999), self._spin(-9999, 9999)
         self.s_num_padding = self._spin(1, 12)
@@ -439,6 +458,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(box)
 
         box, form = self._group("grp_ext")
+        self.g_ext = box
         self.cb_ext = self._combo("ext", engine.EXT_MODES)
         self.e_ext = self._line()
         self.cb_ext.currentIndexChanged.connect(
@@ -449,7 +469,9 @@ class MainWindow(QMainWindow):
         form.addRow(row)
         layout.addWidget(box)
 
-        box, form = self._group("grp_files")
+        # Scelgono i file da rinominare, non il nome: valgono sempre e non hanno casella
+        box = QGroupBox(tr("grp_files"))
+        form = QFormLayout(box)
         self.e_filter = QLineEdit(placeholderText=tr("filter_placeholder"))
         self.c_recursive = QCheckBox(tr("recursive"))
         self.c_hidden = QCheckBox(tr("hidden"))
@@ -563,6 +585,14 @@ class MainWindow(QMainWindow):
         for spin in self._spins:
             spin.interpretText()
         return Rules(
+            find_enabled=self.g_find.isChecked(),
+            remove_enabled=self.g_remove.isChecked(),
+            trim_enabled=self.g_trim.isChecked(),
+            insert_at_enabled=self.g_insert_at.isChecked(),
+            case_enabled=self.g_case.isChecked(),
+            affix_enabled=self.g_affix.isChecked(),
+            date_enabled=self.g_date.isChecked(),
+            ext_enabled=self.g_ext.isChecked(),
             replace_all=self.g_replace_all.isChecked(),
             replace_all_text=self.e_replace_all.text(),
             find=self.e_find.text(),
@@ -599,6 +629,14 @@ class MainWindow(QMainWindow):
         def select(combo: QComboBox, code: str):
             combo.setCurrentIndex(max(0, combo.findData(code)))
 
+        self.g_find.setChecked(r.find_enabled)
+        self.g_remove.setChecked(r.remove_enabled)
+        self.g_trim.setChecked(r.trim_enabled)
+        self.g_insert_at.setChecked(r.insert_at_enabled)
+        self.g_case.setChecked(r.case_enabled)
+        self.g_affix.setChecked(r.affix_enabled)
+        self.g_date.setChecked(r.date_enabled)
+        self.g_ext.setChecked(r.ext_enabled)
         self.g_replace_all.setChecked(r.replace_all)
         self.e_replace_all.setText(r.replace_all_text)
         self.e_find.setText(r.find)
@@ -856,6 +894,10 @@ class MainWindow(QMainWindow):
             if result.done:
                 engine.save_journal(JOURNAL_FILE, result.done)
             self._replace_paths(dict(result.done))
+            if result.done:
+                # I valori restano nei campi, ma la prossima rinomina si sceglie da capo
+                for box in self._rule_groups:
+                    box.setChecked(False)
         finally:
             QApplication.restoreOverrideCursor()
         self.refresh_preview()

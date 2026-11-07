@@ -7,6 +7,9 @@ Interfaccia in italiano e in inglese, scelta dal menu **Lingua**.
 
 ## Funzioni
 
+Ogni regola si attiva con la casella nel suo titolo. Dopo ogni rinomina le caselle si spengono: i valori restano nei
+campi, ma la rinomina successiva si sceglie da capo, senza riapplicare per sbaglio le regole di prima.
+
 - **Sostituisci tutto il nome** con un testo nuovo.
 - **Cerca e sostituisci**, con o senza distinzione tra maiuscole e minuscole, anche con espressioni regolari,
   con quante coppie cerca/sostituisci servono, applicate in ordine.

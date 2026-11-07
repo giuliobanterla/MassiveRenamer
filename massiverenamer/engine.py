@@ -13,7 +13,7 @@ import sys
 import time
 import unicodedata
 import uuid
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -37,13 +37,38 @@ class RuleError(ValueError):
     """Regola non valida (per esempio un'espressione regolare sbagliata)."""
 
 
+# Gruppi di regole con la loro casella: casella → campi che la regola usa
+RULE_GROUPS = {
+    "find_enabled": ("find", "replacements"),
+    "remove_enabled": ("remove_count",),
+    "trim_enabled": ("trim_left", "trim_right"),
+    "insert_at_enabled": ("insert_text",),
+    "case_enabled": ("case",),
+    "affix_enabled": ("prefix", "suffix"),
+    "date_enabled": ("date_mode",),
+    "ext_enabled": ("ext_mode",),
+}
+
+
 @dataclass
 class Rules:
     """Insieme delle regole, applicate in quest'ordine:
     nome sostituito per intero, cerca/sostituisci (anche più coppie), caratteri tolti in una
     posizione, taglio, testo inserito in una posizione, maiuscole/minuscole, testo prima/dopo,
-    data, numerazione, estensione."""
+    data, numerazione, estensione.
 
+    Ogni gruppo ha una casella (`replace_all`, `numbering` e i campi di RULE_GROUPS): se è spenta
+    il gruppo non si applica, ma i suoi valori restano. Qui le caselle di RULE_GROUPS sono accese,
+    così basta indicare i valori; nell'interfaccia partono spente (`all_off`)."""
+
+    find_enabled: bool = True
+    remove_enabled: bool = True
+    trim_enabled: bool = True
+    insert_at_enabled: bool = True
+    case_enabled: bool = True
+    affix_enabled: bool = True
+    date_enabled: bool = True
+    ext_enabled: bool = True
     replace_all: bool = False
     replace_all_text: str = ""
     find: str = ""
@@ -92,7 +117,23 @@ class Rules:
             [str(pair[0]), str(pair[1])] for pair in rules.replacements
             if isinstance(pair, (list, tuple)) and len(pair) == 2
         ]
+        # Regole salvate prima delle caselle: è acceso solo il gruppo che ha un effetto
+        default = cls()
+        for flag, names in RULE_GROUPS.items():
+            if not isinstance(data.get(flag), bool):
+                setattr(rules, flag, any(getattr(rules, n) != getattr(default, n) for n in names))
         return rules
+
+    def all_off(self) -> "Rules":
+        """Le stesse regole con tutte le caselle spente."""
+        return replace(self, replace_all=False, numbering=False, **{flag: False for flag in RULE_GROUPS})
+
+    def effective(self) -> "Rules":
+        """Le regole da applicare: i gruppi con la casella spenta tornano ai valori che non hanno effetto."""
+        default = Rules()
+        neutral = {n: getattr(default, n) for flag, names in RULE_GROUPS.items()
+                   if not getattr(self, flag) for n in names}
+        return replace(self, **neutral)
 
     def find_pairs(self) -> list[tuple[str, str]]:
         """Tutte le coppie cerca/sostituisci non vuote, nell'ordine in cui si applicano."""
@@ -129,6 +170,7 @@ class Renamer:
     """Applica le regole a un nome. Compila una volta sola l'eventuale espressione regolare."""
 
     def __init__(self, rules: Rules):
+        rules = rules.effective()
         self.rules = rules
         self._patterns: list[tuple[re.Pattern, str]] = []
         flags = 0 if rules.match_case else re.IGNORECASE
