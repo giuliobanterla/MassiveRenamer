@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
@@ -130,6 +131,7 @@ def test_clear_list_button_and_shortcut(window, qapp, folder):
 
 def test_typed_numbers_are_used(window, qapp, folder):
     window.add_paths([folder / "note.txt"])
+    window.g_trim.setChecked(True)
     spin = window.s_trim_left
     spin.setFocus()
     spin.lineEdit().selectAll()
@@ -170,6 +172,67 @@ def test_rename_and_undo(window, qapp, folder, dialogs):
     window.do_undo()
     assert (folder / "IMG_0012.JPG").exists() and (folder / "note.txt").exists()
     assert not gui.JOURNAL_FILE.exists()
+
+
+def test_rule_needs_its_checkbox(window, qapp, folder):
+    window.add_paths([folder / "note.txt"])
+    window.set_rules(Rules().all_off())
+    assert not any(box.isChecked() for box in window._rule_groups)
+    assert not window.s_trim_right.isEnabled()  # campi spenti finché la casella è spenta
+    window.s_trim_right.setValue(1)
+    wait(qapp)
+    assert window.plan[0].new_name == "note.txt"
+    window.g_trim.setChecked(True)
+    assert window.s_trim_right.isEnabled()
+    wait(qapp)
+    assert window.plan[0].new_name == "not.txt"
+
+
+def test_rename_turns_checkboxes_off(window, qapp, folder, dialogs):
+    window.add_paths([folder / "note.txt"])
+    window.set_rules(Rules(prefix="x_", numbering=True, replace_all=False))
+    wait(qapp)
+    window.do_rename()
+    assert (folder / "x_note_1.txt").exists()
+    assert not any(box.isChecked() for box in window._rule_groups)
+    assert window.e_prefix.text() == "x_"  # i valori restano, pronti per la prossima volta
+    assert window.plan[0].new_name == "x_note_1.txt"  # il nome attuale resta così com'è
+
+
+def test_old_settings_start_with_checkboxes_off(window):
+    old = {"trim_right": 1, "prefix": "x"}
+    other = gui.MainWindow({"rules": old}, [])
+    assert not any(box.isChecked() for box in other._rule_groups) and other.get_rules().trim_right == 1
+    other.close()
+
+
+def test_reset_turns_checkboxes_off(window):
+    window.set_rules(Rules(prefix="x"))
+    window.act_reset.trigger()
+    assert not any(box.isChecked() for box in window._rule_groups)
+
+
+def luminance(color):
+    def channel(c):
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return 0.2126 * channel(color.redF()) + 0.7152 * channel(color.greenF()) + 0.0722 * channel(color.blueF())
+
+
+def contrast(a, b):
+    high, low = sorted((luminance(a), luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+@pytest.mark.parametrize("backgrounds", [("#ffffff", "#f5f5f5"), ("#1e1e1e", "#2b2b2b", "#353535")])
+def test_preview_colors_are_readable(qapp, backgrounds):
+    palette = QPalette()
+    palette.setColor(QPalette.Base, QColor(backgrounds[0]))
+    for status in Status:
+        color = gui.status_color(status, palette)
+        for background in backgrounds:
+            assert contrast(color, QColor(background)) >= 4.5, (status, background)
+    highlight = QColor(gui.DiffDelegate.HIGHLIGHT)
+    assert contrast(QColor(gui.DiffDelegate.HIGHLIGHT_TEXT), highlight) >= 4.5
 
 
 def test_rename_reports_problems(window, qapp, folder):

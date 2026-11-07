@@ -3,6 +3,7 @@ import os
 import struct
 import subprocess
 import sys
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -269,3 +270,25 @@ def test_journal_reads_old_format(tmp_path):
 def test_manual_sort_keeps_order(tmp_path):
     paths = [tmp_path / n for n in ("c", "a", "b")]
     assert engine.sort_paths(paths, "manual") == paths
+
+
+def test_disabled_groups_have_no_effect():
+    values = dict(find="a", replace_with="b", remove_count=1, trim_left=1, insert_text="X", case="upper",
+                  prefix="p", suffix="s", ext_mode="upper")
+    assert Renamer(Rules(**values)).new_name("casa.txt", 0) != "casa.txt"
+    assert Renamer(Rules(**values).all_off()).new_name("casa.txt", 0) == "casa.txt"
+    # Ogni casella comanda solo il suo gruppo
+    only_prefix = replace(Rules(**values).all_off(), affix_enabled=True)
+    assert Renamer(only_prefix).new_name("casa.txt", 0) == "pcasas.txt"
+    # Una regex sbagliata non dà errore finché il suo gruppo è spento
+    assert Renamer(Rules(find="(", use_regex=True, find_enabled=False)).new_name("a.txt", 0) == "a.txt"
+
+
+def test_all_off_keeps_values_and_old_presets_turn_on_what_they_use():
+    off = Rules(prefix="p", numbering=True).all_off()
+    assert off.prefix == "p" and not off.numbering and not off.affix_enabled
+    assert Rules.from_dict(off.to_dict()) == off
+
+    old = Rules.from_dict({"prefix": "p", "trim_right": 2})  # salvate prima delle caselle
+    assert old.affix_enabled and old.trim_enabled and not old.find_enabled and not old.case_enabled
+    assert Renamer(old).new_name("casa.txt", 0) == "pca.txt"
