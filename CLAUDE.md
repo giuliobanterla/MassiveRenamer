@@ -62,6 +62,8 @@ minuscole, script `.bat`/`.sh`).
 - Firma macOS: Developer ID team `D3694MQ8D9` (lo stesso di GBFileCopier); segreti del repository solo nel
   workflow di release. In locale: `MACOS_SIGN_IDENTITY="Developer ID Application: Giulio Banterla (D3694MQ8D9)" .venv/bin/python build.py`
   (firma senza notarizzare). Windows non è firmato.
+- Prima di una release: `/code-review` sulle modifiche dall'ultimo tag (e `/security-review` se toccano l'aggiornamento
+  automatico, il registro di sistema o la firma); riportare i risultati prima di aprire la PR di versione.
 - Release: PR che aggiorna `__version__` → merge → tag annotato `vX.Y.Z` su quel commit (il workflow
   rifiuta un tag diverso da `__version__`) → controllare gli asset e `SHA256SUMS.txt`.
 - Commit, PR, commenti e testi del progetto in italiano.
