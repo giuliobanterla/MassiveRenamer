@@ -62,6 +62,9 @@ miss. Never copy those names into any file, and in your report refer to them gen
 ## How to report
 
 Start with one line: the range reviewed and the number of findings, or "No findings" if clean.
+Only real findings are numbered and counted. What the "Not findings" list excludes (public identifiers,
+placeholders, checksums) is never a finding, not even a Low one "needing no action": at most close the
+report with one line "Ignored as not findings: ...".
 For each finding give: **severity** (High: a working secret or private key; Medium: private
 network or personal data; Low: maybe intentional), **file:line**, what it is, and what to do.
 Never print a secret in full: show at most the first four characters and mask the rest
