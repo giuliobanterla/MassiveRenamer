@@ -53,6 +53,9 @@ minuscole, script `.bat`/`.sh`).
 
 - `main` è protetto: si lavora su un branch, si apre una PR con `gh`, si aspetta la CI verde
   (`gh run watch <id> --exit-status`). Merge (squash) solo quando il maintainer lo chiede.
+- Prima di ogni push di un branch e prima di una release: sub-agente `secrets-reviewer`
+  (`.claude/agents/secrets-reviewer.md`); il repository è pubblico, quindi token, indirizzi privati e dati
+  personali non devono finire in un commit.
 - Mai push diretto su `main`. Mai creare o pubblicare tag o release senza un sì esplicito.
   `.claude/settings.json` chiede conferma per questi comandi. Un tag `v*` lancia `release.yml`, che
   pubblica la release: i programmi installati la propongono subito come aggiornamento.
